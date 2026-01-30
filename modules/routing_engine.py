@@ -145,6 +145,51 @@ class RoutingEngine:
         # Update dnsmasq config
         self._update_dnsmasq_config()
     
+    def _parse_peer_gateways(self, allowed_ip: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        Parse peer allowed_ip string to extract IPv4 and IPv6 gateways.
+        
+        The first IPv4 address becomes the IPv4 gateway.
+        The first IPv6 address becomes the IPv6 gateway.
+        CIDR notation is stripped (e.g., '172.22.1.2/32' -> '172.22.1.2').
+        
+        Args:
+            allowed_ip: Comma-separated allowed IPs (e.g., '172.22.1.2/32, fd22:1::2/128')
+        
+        Returns:
+            Tuple of (ipv4_gateway, ipv6_gateway)
+        """
+        if not allowed_ip:
+            return None, None
+        
+        ipv4_gateway = None
+        ipv6_gateway = None
+        
+        # Split by comma and process each IP
+        for ip_cidr in allowed_ip.split(','):
+            ip_cidr = ip_cidr.strip()
+            if not ip_cidr:
+                continue
+            
+            # Strip CIDR notation
+            ip = ip_cidr.split('/')[0]
+            
+            # Determine if IPv4 or IPv6
+            if ':' in ip:
+                # IPv6 address
+                if ipv6_gateway is None:
+                    ipv6_gateway = ip
+            else:
+                # IPv4 address
+                if ipv4_gateway is None:
+                    ipv4_gateway = ip
+            
+            # Stop if we have both
+            if ipv4_gateway and ipv6_gateway:
+                break
+        
+        return ipv4_gateway, ipv6_gateway
+
     def apply_rule(self, rule: RoutingRule) -> tuple[bool, str]:
         """
         Apply a single routing rule.
@@ -182,7 +227,28 @@ class RoutingEngine:
                 wg_interface = self.wg.get_interface_name(rule.target_config)
                 if not wg_interface:
                     return self._mark_failed(rule, f"WireGuard config {rule.target_config} not found")
-                success, msg = setup_wireguard_routing(rule.fwmark, rule.routing_table, wg_interface)
+                
+                # Get peer gateway IPs from allowed_ip
+                ipv4_gateway = None
+                ipv6_gateway = None
+                
+                if rule.target_peer:
+                    # Specific peer selected - use its allowed IPs
+                    peer = self.wg.get_peer(rule.target_config, rule.target_peer)
+                    if peer:
+                        ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peer.get('allowed_ip', ''))
+                        logger.info(f"Using peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
+                else:
+                    # No specific peer - try to get first peer's IPs as default
+                    peers = self.wg.list_peers(rule.target_config)
+                    if peers:
+                        ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peers[0].get('allowed_ip', ''))
+                        logger.info(f"Using first peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
+                
+                success, msg = setup_wireguard_routing(
+                    rule.fwmark, rule.routing_table, wg_interface,
+                    ipv4_gateway=ipv4_gateway, ipv6_gateway=ipv6_gateway
+                )
             else:
                 return self._mark_failed(rule, f"Unknown target type: {rule.target_type}")
             

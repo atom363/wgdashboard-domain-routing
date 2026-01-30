@@ -31,6 +31,9 @@ def run_command(cmd: list[str], check: bool = True) -> tuple[bool, str]:
             text=True,
             check=check
         )
+        # When check=False, we need to manually check returncode
+        if result.returncode != 0:
+            return False, result.stderr.strip() or f"Command failed with code {result.returncode}"
         return True, result.stdout.strip()
     except subprocess.CalledProcessError as e:
         return False, e.stderr.strip() or str(e)
@@ -59,16 +62,21 @@ def create_ipset(name: str) -> tuple[bool, str]:
     Returns:
         Tuple of (success, message)
     """
+    logger.info(f"Creating ipset: {name}")
+    
     if ipset_exists(name):
         logger.debug(f"ipset {name} already exists")
         return True, "ipset already exists"
     
     # Create hash:ip ipset for IPv4
-    success, output = run_command([
+    cmd = [
         'ipset', 'create', name, 'hash:ip',
         'family', 'inet',
         'timeout', '0'  # No automatic timeout
-    ])
+    ]
+    logger.info(f"Running: {' '.join(cmd)}")
+    
+    success, output = run_command(cmd)
     
     if success:
         logger.info(f"Created ipset: {name}")

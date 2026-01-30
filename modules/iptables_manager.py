@@ -24,6 +24,9 @@ def run_command(cmd: list[str], check: bool = True) -> tuple[bool, str]:
             text=True,
             check=check
         )
+        # When check=False, we need to manually check returncode
+        if result.returncode != 0:
+            return False, result.stderr.strip() or f"Command failed with code {result.returncode}"
         return True, result.stdout.strip()
     except subprocess.CalledProcessError as e:
         return False, e.stderr.strip() or str(e)
@@ -72,6 +75,7 @@ def add_mangle_rule(ipset_name: str, fwmark: int, rule_id: int) -> tuple[bool, s
     Returns:
         Tuple of (success, message)
     """
+    logger.info(f"Adding mangle rules for ipset={ipset_name}, fwmark={fwmark}, rule_id={rule_id}")
     errors = []
     
     for chain in ['OUTPUT', 'PREROUTING']:
@@ -79,12 +83,15 @@ def add_mangle_rule(ipset_name: str, fwmark: int, rule_id: int) -> tuple[bool, s
             logger.debug(f"Rule already exists in {chain} for {ipset_name}")
             continue
         
-        success, output = run_command([
+        cmd = [
             'iptables', '-t', 'mangle', '-A', chain,
             '-m', 'set', '--match-set', ipset_name, 'dst',
             '-j', 'MARK', '--set-mark', str(fwmark),
             '-m', 'comment', '--comment', get_comment(rule_id)
-        ])
+        ]
+        logger.info(f"Running: {' '.join(cmd)}")
+        
+        success, output = run_command(cmd)
         
         if success:
             logger.info(f"Added mangle rule in {chain} for ipset {ipset_name} with mark {fwmark}")

@@ -22,6 +22,9 @@ def run_command(cmd: list[str], check: bool = True) -> tuple[bool, str]:
             text=True,
             check=check
         )
+        # When check=False, we need to manually check returncode
+        if result.returncode != 0:
+            return False, result.stderr.strip() or f"Command failed with code {result.returncode}"
         return True, result.stdout.strip()
     except subprocess.CalledProcessError as e:
         return False, e.stderr.strip() or str(e)
@@ -211,14 +214,18 @@ def setup_default_gateway_routing(fwmark: int, table: int) -> tuple[bool, str]:
     return True, f"Routing via default gateway ({gateway or interface})"
 
 
-def setup_wireguard_routing(fwmark: int, table: int, wg_interface: str) -> tuple[bool, str]:
+def setup_wireguard_routing(fwmark: int, table: int, wg_interface: str, 
+                            ipv4_gateway: Optional[str] = None, 
+                            ipv6_gateway: Optional[str] = None) -> tuple[bool, str]:
     """
-    Set up routing through a WireGuard interface for marked packets.
+    Set up routing through a WireGuard peer for marked packets.
     
     Args:
         fwmark: Firewall mark value
         table: Routing table ID
         wg_interface: WireGuard interface name (e.g., "wg0")
+        ipv4_gateway: IPv4 gateway (peer's first allowed IP)
+        ipv6_gateway: IPv6 gateway (peer's second allowed IP)
     
     Returns:
         Tuple of (success, message)
@@ -228,17 +235,55 @@ def setup_wireguard_routing(fwmark: int, table: int, wg_interface: str) -> tuple
     if not success:
         return False, f"WireGuard interface {wg_interface} not found"
     
-    # Add ip rule
+    # Add ip rule for IPv4
     success, msg = add_ip_rule(fwmark, table)
     if not success:
         return False, f"Failed to add ip rule: {msg}"
     
-    # Add route via WireGuard interface
-    success, msg = add_default_route_to_table(table, None, wg_interface)
-    if not success:
-        return False, f"Failed to add route: {msg}"
+    # Flush the table first
+    run_command(['ip', 'route', 'flush', 'table', str(table)], check=False)
     
-    return True, f"Routing via WireGuard interface {wg_interface}"
+    routes_added = []
+    
+    # Add IPv4 route via peer gateway
+    if ipv4_gateway:
+        cmd = ['ip', 'route', 'add', 'default', 'via', ipv4_gateway, 'dev', wg_interface, 'table', str(table)]
+        success, output = run_command(cmd)
+        if success:
+            logger.info(f"Added IPv4 route to table {table}: via {ipv4_gateway} dev {wg_interface}")
+            routes_added.append(f"IPv4 via {ipv4_gateway}")
+        else:
+            logger.error(f"Failed to add IPv4 route: {output}")
+    
+    # Add IPv6 route via peer gateway
+    if ipv6_gateway:
+        # Add ip rule for IPv6 if not exists
+        success6, _ = run_command(['ip', '-6', 'rule', 'list'])
+        if success6:
+            # Check if IPv6 rule exists
+            success6, output = run_command(['ip', '-6', 'rule', 'add', 'fwmark', str(fwmark), 'table', str(table)], check=False)
+            if success6:
+                logger.info(f"Added IPv6 rule: fwmark {fwmark} -> table {table}")
+        
+        cmd = ['ip', '-6', 'route', 'add', 'default', 'via', ipv6_gateway, 'dev', wg_interface, 'table', str(table)]
+        success, output = run_command(cmd, check=False)
+        if success:
+            logger.info(f"Added IPv6 route to table {table}: via {ipv6_gateway} dev {wg_interface}")
+            routes_added.append(f"IPv6 via {ipv6_gateway}")
+        else:
+            logger.warning(f"Failed to add IPv6 route: {output}")
+    
+    # Fallback: if no gateways provided, just route via interface
+    if not ipv4_gateway and not ipv6_gateway:
+        success, msg = add_default_route_to_table(table, None, wg_interface)
+        if not success:
+            return False, f"Failed to add route: {msg}"
+        routes_added.append(f"dev {wg_interface}")
+    
+    if not routes_added:
+        return False, "No routes were added"
+    
+    return True, f"Routing via WireGuard: {', '.join(routes_added)}"
 
 
 def cleanup_routing(fwmark: int, table: int) -> tuple[bool, str]:
@@ -254,15 +299,21 @@ def cleanup_routing(fwmark: int, table: int) -> tuple[bool, str]:
     """
     errors = []
     
-    # Remove ip rule
+    # Remove IPv4 ip rule
     success, msg = remove_ip_rule(fwmark, table)
     if not success:
         errors.append(f"rule: {msg}")
     
-    # Flush routing table
+    # Remove IPv6 ip rule (if exists)
+    run_command(['ip', '-6', 'rule', 'del', 'fwmark', str(fwmark), 'table', str(table)], check=False)
+    
+    # Flush IPv4 routing table
     success, msg = flush_routing_table(table)
     if not success:
         errors.append(f"flush: {msg}")
+    
+    # Flush IPv6 routing table
+    run_command(['ip', '-6', 'route', 'flush', 'table', str(table)], check=False)
     
     if errors:
         return False, "; ".join(errors)

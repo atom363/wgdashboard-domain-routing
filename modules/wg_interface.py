@@ -51,7 +51,17 @@ class WgInterface:
             Configuration object or None
         """
         with _wg_lock:
-            return self._configs.get(name)
+            # Try exact match first
+            config = self._configs.get(name)
+            if config:
+                return config
+            
+            # Try case-insensitive match
+            for k, v in self._configs.items():
+                if k.lower() == name.lower():
+                    return v
+                    
+            return None
     
     def get_configuration_json(self, name: str) -> Optional[dict]:
         """
@@ -73,6 +83,40 @@ class WgInterface:
             logger.error(f"Failed to get JSON for config {name}: {e}")
             return None
     
+    def _extract_peers(self, json_data: dict) -> Any:
+        """Helper to extract peers from various possible WGDashboard JSON structures."""
+        if not isinstance(json_data, dict):
+            return []
+            
+        # 1. Direct keys (common in different versions)
+        for key in ['Peers', 'peer_data', 'peers', 'Peer', 'PeerData', 'clients']:
+            val = json_data.get(key)
+            if val:
+                return val
+        
+        # 2. Nested in Configuration
+        config = json_data.get('Configuration')
+        if isinstance(config, dict):
+            for key in ['Peers', 'peer_data', 'peers', 'Peer', 'PeerData']:
+                val = config.get(key)
+                if val:
+                    return val
+        
+        # 3. Search all values for a list/dict that looks like peers
+        for val in json_data.values():
+            if isinstance(val, list) and len(val) > 0:
+                # Check if first element looks like a peer
+                item = val[0]
+                if isinstance(item, dict) and any(k in item for k in ['id', 'public_key', 'allowed_ip', 'allowed_ips', 'endpoint']):
+                    return val
+            elif isinstance(val, dict) and len(val) > 0:
+                # Check if it's a dict of peer dicts (keys are public keys)
+                first_val = next(iter(val.values()))
+                if isinstance(first_val, dict) and any(k in first_val for k in ['id', 'public_key', 'allowed_ip', 'allowed_ips', 'endpoint']):
+                    return val
+                    
+        return []
+
     def list_peers(self, config_name: str) -> list[dict]:
         """
         List all peers for a WireGuard configuration.
@@ -83,27 +127,80 @@ class WgInterface:
         Returns:
             List of peer dictionaries
         """
-        json_data = self.get_configuration_json(config_name)
-        if not json_data:
+        logger.info(f"list_peers called for config: {config_name}")
+        config_obj = self.get_configuration(config_name)
+        if not config_obj:
+            logger.warning(f"Configuration {config_name} not found in {self.list_configurations()}")
             return []
+            
+        peers_data = []
+        # Priority 1: Direct .Peers attribute on the object (WGDashboard v4+)
+        if hasattr(config_obj, 'Peers'):
+            logger.info(f"Found .Peers attribute on {config_name}")
+            peers_data = config_obj.Peers
+        else:
+            logger.info(f"No .Peers attribute on {config_name}, falling back to JSON")
+            # Priority 2: Try extracting from JSON (fallback/older versions)
+            json_data = self.get_configuration_json(config_name)
+            if json_data:
+                peers_data = self._extract_peers(json_data)
         
-        peers_data = json_data.get('Peers', [])
+        logger.info(f"Peers data type: {type(peers_data)}, length: {len(peers_data) if peers_data else 0}")
+        
         peers = []
         
-        for peer in peers_data:
-            peers.append({
-                'id': peer.get('id', ''),
-                'name': peer.get('name', ''),
-                'public_key': peer.get('id', ''),  # 'id' is usually the public key
-                'allowed_ip': peer.get('allowed_ip', ''),
-                'endpoint': peer.get('endpoint', ''),
-                'status': peer.get('status', 'unknown'),
-                'latest_handshake': peer.get('latest_handshake', ''),
-                'transfer_rx': peer.get('cumu_receive', 0),
-                'transfer_tx': peer.get('cumu_sent', 0)
-            })
+        # Handle both list of dicts and dict of dicts
+        if isinstance(peers_data, dict):
+            for p_id, peer_dict in peers_data.items():
+                if not isinstance(peer_dict, dict):
+                    continue
+                self._add_peer_to_list(peers, p_id, peer_dict)
+        elif isinstance(peers_data, list):
+            for peer in peers_data:
+                # Handle case where peer might be an object or a dict
+                if isinstance(peer, dict):
+                    peer_dict = peer
+                    p_id = peer_dict.get('id') or peer_dict.get('public_key') or peer_dict.get('publicKey') or ''
+                elif hasattr(peer, '__dict__'):
+                    # If it's an object, try to use its attributes
+                    peer_dict = peer.__dict__
+                    p_id = getattr(peer, 'id', '') or getattr(peer, 'public_key', '') or ''
+                else:
+                    continue
+                
+                self._add_peer_to_list(peers, p_id, peer_dict)
         
+        logger.info(f"Returning {len(peers)} processed peers")
         return peers
+
+    def _add_peer_to_list(self, peers: list, p_id: str, peer_data: Any):
+        """Helper to normalize peer data and add to list."""
+        def get_v(obj, keys, default=''):
+            if isinstance(keys, str):
+                keys = [keys]
+            
+            for key in keys:
+                if isinstance(obj, dict):
+                    val = obj.get(key)
+                else:
+                    val = getattr(obj, key, None)
+                
+                if val is not None:
+                    return val
+            return default
+
+        peers.append({
+            'id': p_id or get_v(peer_data, ['id', 'public_key', 'publicKey']),
+            'name': get_v(peer_data, ['name', 'remark', 'comment']),
+            'public_key': p_id or get_v(peer_data, ['id', 'public_key', 'publicKey']),
+            'allowed_ip': get_v(peer_data, ['allowed_ip', 'allowed_ips']),
+            'endpoint': get_v(peer_data, ['endpoint']),
+            'status': get_v(peer_data, ['status'], 'unknown'),
+            'latest_handshake': get_v(peer_data, ['latest_handshake']),
+            'transfer_rx': get_v(peer_data, ['cumu_receive', 'total_receive'], 0),
+            'transfer_tx': get_v(peer_data, ['cumu_sent', 'total_sent'], 0)
+        })
+
     
     def get_peer(self, config_name: str, peer_id: str) -> Optional[dict]:
         """

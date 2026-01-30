@@ -53,16 +53,27 @@ def get_status():
 def get_wg_configurations():
     """List available WireGuard configurations."""
     wg_configs = get_wg_configs()
+    engine = get_routing_engine()
     configs = []
     
     for name, config in wg_configs.items():
         try:
             json_data = config.toJson()
+            
+            # Get peer count using the wg interface helper for consistency
+            peer_count = 0
+            if engine and engine.wg:
+                peer_count = len(engine.wg.list_peers(name))
+            else:
+                # Fallback if engine not yet ready
+                peers_data = json_data.get('Peers') or json_data.get('peer_data') or json_data.get('peers') or []
+                peer_count = len(peers_data)
+
             configs.append({
                 'name': name,
-                'status': json_data.get('Status', 'unknown'),
-                'address': json_data.get('Address', ''),
-                'peer_count': len(json_data.get('Peers', []))
+                'status': json_data.get('Status') or json_data.get('status', 'unknown'),
+                'address': json_data.get('Address') or json_data.get('address', ''),
+                'peer_count': peer_count
             })
         except Exception as e:
             configs.append({
@@ -81,30 +92,29 @@ def get_wg_configurations():
 @auth_required
 def get_wg_peers(config_name: str):
     """List peers for a WireGuard configuration."""
-    wg_configs = get_wg_configs()
-    
-    if config_name not in wg_configs:
+    engine = get_routing_engine()
+    if not engine or not engine.wg:
         return jsonify({
             'status': False,
-            'message': f'Configuration "{config_name}" not found'
-        }), 404
+            'message': 'WireGuard interface helper not available'
+        }), 500
+    
+    # Ensure wg_interface has the latest configs from app context
+    wg_configs = get_wg_configs()
+    engine.wg.update_configs(wg_configs)
+    
+    current_app.logger.info(f"API: get_wg_peers called for {config_name}. Available configs: {list(wg_configs.keys())}")
     
     try:
-        config = wg_configs[config_name]
-        json_data = config.toJson()
-        peers_data = json_data.get('Peers', [])
+        peers = engine.wg.list_peers(config_name)
+        current_app.logger.info(f"API: list_peers returned {len(peers)} peers")
         
-        peers = []
-        for peer in peers_data:
-            peers.append({
-                'id': peer.get('id', ''),
-                'name': peer.get('name', ''),
-                'public_key': peer.get('id', ''),  # id is usually the public key
-                'allowed_ips': peer.get('allowed_ip', ''),
-                'endpoint': peer.get('endpoint', ''),
-                'status': peer.get('status', 'unknown')
-            })
-        
+        if not peers and config_name not in engine.wg.list_configurations():
+             return jsonify({
+                'status': False,
+                'message': f'Configuration "{config_name}" not found'
+            }), 404
+
         return jsonify({
             'status': True,
             'data': peers

@@ -40,19 +40,31 @@ def run_command(cmd: list[str], check: bool = True) -> tuple[bool, str]:
 
 
 def is_dnsmasq_installed() -> bool:
-    """Check if dnsmasq is installed."""
+    """
+    Check if dnsmasq is available.
+    First try 'which dnsmasq', if that fails check if process is running.
+    """
+    # First try to find dnsmasq binary
     success, _ = run_command(['which', 'dnsmasq'], check=False)
-    return success
+    if success:
+        return True
+    
+    # If not found, check if it's running (e.g., in container)
+    return is_dnsmasq_running()
 
 
 def is_dnsmasq_running() -> bool:
-    """Check if dnsmasq service is running."""
-    # Try systemctl first
-    success, output = run_command(['systemctl', 'is-active', 'dnsmasq'], check=False)
-    if success and output == 'active':
+    """
+    Check if dnsmasq is running.
+    Since dnsmasq runs in a separate container with shared PID namespace,
+    we check for the process directly.
+    """
+    # Check if dnsmasq process exists in shared PID namespace
+    success, _ = run_command(['pidof', 'dnsmasq'], check=False)
+    if success:
         return True
     
-    # Try pgrep
+    # Fallback: try pgrep
     success, _ = run_command(['pgrep', '-x', 'dnsmasq'], check=False)
     return success
 
@@ -150,7 +162,7 @@ def generate_config(rules: list[dict], config_path: str = DEFAULT_CONFIG_PATH) -
 
 def reload_dnsmasq() -> tuple[bool, str]:
     """
-    Reload dnsmasq to apply configuration changes.
+    Reload dnsmasq to apply configuration changes using SIGHUP.
     
     Returns:
         Tuple of (success, message)
@@ -159,25 +171,22 @@ def reload_dnsmasq() -> tuple[bool, str]:
         logger.warning("dnsmasq is not installed")
         return False, "dnsmasq not installed"
     
-    # Try systemctl first (most common)
-    success, output = run_command(['systemctl', 'reload', 'dnsmasq'], check=False)
-    if success:
-        logger.info("Reloaded dnsmasq via systemctl")
-        return True, "dnsmasq reloaded"
+    # Get dnsmasq PID and send SIGHUP
+    success, pid = run_command(['pidof', 'dnsmasq'], check=False)
+    if success and pid:
+        success, output = run_command(['kill', '-HUP', pid.strip()], check=False)
+        if success:
+            logger.info(f"Reloaded dnsmasq via SIGHUP (PID: {pid.strip()})")
+            return True, "dnsmasq reloaded"
+        return False, f"Failed to send SIGHUP: {output}"
     
-    # Try service command
-    success, output = run_command(['service', 'dnsmasq', 'reload'], check=False)
-    if success:
-        logger.info("Reloaded dnsmasq via service")
-        return True, "dnsmasq reloaded"
-    
-    # Try SIGHUP
+    # Fallback: try pkill -HUP if pidof didn't work
     success, output = run_command(['pkill', '-HUP', 'dnsmasq'], check=False)
     if success:
-        logger.info("Reloaded dnsmasq via SIGHUP")
+        logger.info("Reloaded dnsmasq via SIGHUP (pkill)")
         return True, "dnsmasq reloaded"
     
-    return False, "Failed to reload dnsmasq"
+    return False, "Failed to reload dnsmasq: process not found"
 
 
 def remove_config(config_path: str = DEFAULT_CONFIG_PATH) -> tuple[bool, str]:

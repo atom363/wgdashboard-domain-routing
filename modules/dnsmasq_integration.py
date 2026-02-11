@@ -156,13 +156,13 @@ def reload_dnsmasq() -> tuple[bool, str]:
             return True, "dnsmasq restarted"
         return False, f"Failed to send TERM: {output}"
     
-    # Fallback: try pkill -HUP if pidof didn't work
-    success, output = run_command(['pkill', '-HUP', 'dnsmasq'], check=False)
+    # Fallback: try pkill -TERM if pidof didn't work
+    success, output = run_command(['pkill', '-TERM', 'dnsmasq'], check=False)
     if success:
-        logger.info("Reloaded dnsmasq via SIGHUP (pkill)")
-        return True, "dnsmasq reloaded"
+        logger.info("Restarted dnsmasq via TERM (pkill)")
+        return True, "dnsmasq restarted"
     
-    return False, "Failed to reload dnsmasq: process not found"
+    return False, "Failed to restart dnsmasq: process not found"
 
 
 def remove_config(config_path: str = DEFAULT_CONFIG_PATH) -> tuple[bool, str]:

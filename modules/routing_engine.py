@@ -431,7 +431,7 @@ class RoutingEngine:
         if success:
             # Update hash only on successful config write
             self._last_dnsmasq_rules_hash = current_hash
-            logger.info("dnsmasq config updated and reloaded")
+            logger.info("dnsmasq config updated and restarted")
     
     def cleanup_all(self):
         """Remove all applied routing rules from the system."""

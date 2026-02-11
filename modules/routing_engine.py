@@ -95,6 +95,9 @@ class RoutingEngine:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        
+        # Track last known rules state for dnsmasq reload optimization
+        self._last_dnsmasq_rules_hash: Optional[str] = None
     
     def is_running(self) -> bool:
         """Check if the engine is running."""
@@ -130,8 +133,8 @@ class RoutingEngine:
         """Main monitoring loop."""
         logger.info("Routing engine monitoring loop started")
         
-        # Initial apply on start
-        self.apply_all_rules()
+        # Initial apply on start (force dnsmasq update)
+        self.apply_all_rules(force_dnsmasq_update=True)
         
         while self._running and not self._stop_event.is_set():
             try:
@@ -151,13 +154,16 @@ class RoutingEngine:
         applied_states = {s.rule_id: s for s in self.db.get_all_applied_states()}
         
         # Apply new/changed rules
+        rules_changed = False
         for rule in enabled_rules:
             state = applied_states.get(rule.id)
             if not state or state.status != 'active':
                 self.apply_rule(rule)
+                rules_changed = True
         
-        # Update dnsmasq config
-        self._update_dnsmasq_config()
+        # Update dnsmasq config only if rules changed
+        if rules_changed:
+            self._update_dnsmasq_config()
     
     def _parse_peer_gateways(self, allowed_ip: str) -> tuple[Optional[str], Optional[str]]:
         """
@@ -288,6 +294,10 @@ class RoutingEngine:
             )
             self.db.set_applied_state(state)
             
+            # Update dnsmasq config (rule was added or updated)
+            self._last_dnsmasq_rules_hash = None  # Force update
+            self._update_dnsmasq_config()
+            
             logger.info(f"Successfully applied rule: {rule.name} ({ipv4_count} IPv4, {ipv6_count} IPv6)")
             return True, f"Rule applied ({ipv4_count} IPv4, {ipv6_count} IPv6 addresses)"
             
@@ -344,15 +354,22 @@ class RoutingEngine:
         # Remove applied state
         self.db.delete_applied_state(rule_id)
         
+        # Update dnsmasq config (rule was removed)
+        self._last_dnsmasq_rules_hash = None  # Force update on next call
+        self._update_dnsmasq_config()
+        
         if errors:
             return False, "; ".join(errors)
         
         logger.info(f"Successfully removed rule: {rule.name}")
         return True, "Rule removed"
     
-    def apply_all_rules(self) -> dict:
+    def apply_all_rules(self, force_dnsmasq_update: bool = False) -> dict:
         """
         Apply all enabled routing rules.
+        
+        Args:
+            force_dnsmasq_update: Force dnsmasq config update even if rules unchanged
         
         Returns:
             Dictionary with success/failed counts
@@ -368,15 +385,36 @@ class RoutingEngine:
                 results['failed'] += 1
                 results['errors'].append(f"{rule.name}: {msg}")
         
-        # Update dnsmasq config
+        # Update dnsmasq config (forced on initial apply)
+        if force_dnsmasq_update:
+            # Reset hash to force update
+            self._last_dnsmasq_rules_hash = None
         self._update_dnsmasq_config()
         
         logger.info(f"Applied {results['success']} rules, {results['failed']} failed")
         return results
     
+    def _compute_rules_hash(self, rules: list) -> str:
+        """Compute a hash of rules to detect changes."""
+        import hashlib
+        # Create a simple string representation of rules that affect dnsmasq
+        rule_strs = []
+        for rule in sorted(rules, key=lambda r: r.id):
+            if rule.enabled:
+                rule_strs.append(f"{rule.id}:{rule.domain}:{rule.enabled}")
+        return hashlib.md5("|".join(rule_strs).encode()).hexdigest()
+    
     def _update_dnsmasq_config(self):
         """Update dnsmasq configuration with current rules (dual-stack)."""
         rules = self.db.get_enabled_rules()
+        
+        # Compute hash of current rules
+        current_hash = self._compute_rules_hash(rules)
+        
+        # Skip if rules haven't changed
+        if current_hash == self._last_dnsmasq_rules_hash:
+            logger.debug("dnsmasq config unchanged, skipping reload")
+            return
         
         # Build config data with both IPv4 and IPv6 ipset names
         config_rules = []
@@ -389,7 +427,11 @@ class RoutingEngine:
                 'enabled': rule.enabled
             })
         
-        update_dnsmasq(config_rules, self.dnsmasq_config_path)
+        success, msg = update_dnsmasq(config_rules, self.dnsmasq_config_path)
+        if success:
+            # Update hash only on successful config write
+            self._last_dnsmasq_rules_hash = current_hash
+            logger.info("dnsmasq config updated and reloaded")
     
     def cleanup_all(self):
         """Remove all applied routing rules from the system."""

@@ -147,14 +147,14 @@ def reload_dnsmasq() -> tuple[bool, str]:
         logger.warning("dnsmasq is not installed")
         return False, "dnsmasq not installed"
     
-    # Get dnsmasq PID and send SIGHUP
+    # Get dnsmasq PID and send TERM
     success, pid = run_command(['pidof', 'dnsmasq'], check=False)
     if success and pid:
-        success, output = run_command(['kill', '-HUP', pid.strip()], check=False)
+        success, output = run_command(['kill', '-TERM', pid.strip()], check=False)
         if success:
-            logger.info(f"Reloaded dnsmasq via SIGHUP (PID: {pid.strip()})")
-            return True, "dnsmasq reloaded"
-        return False, f"Failed to send SIGHUP: {output}"
+            logger.info(f"Restarted dnsmasq via TERM (PID: {pid.strip()})")
+            return True, "dnsmasq restarted"
+        return False, f"Failed to send TERM: {output}"
     
     # Fallback: try pkill -HUP if pidof didn't work
     success, output = run_command(['pkill', '-HUP', 'dnsmasq'], check=False)

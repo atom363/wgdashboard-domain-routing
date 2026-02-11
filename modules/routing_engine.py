@@ -12,11 +12,12 @@ from typing import Optional
 
 from database import Database, RoutingRule, AppliedState
 from ipset_manager import (
-    get_ipset_name, create_ipset, destroy_ipset, 
-    add_ip_to_ipset, list_ipset_entries, cleanup_all_ipsets
+    get_ipset_name, get_ipset_name_v6, create_ipsets_for_rule, destroy_ipsets_for_rule, 
+    add_ip_to_rule_ipset, list_ipset_entries, cleanup_all_ipsets
 )
 from iptables_manager import (
-    add_mangle_rule, remove_mangle_rule, cleanup_all_rules as cleanup_iptables
+    add_mangle_rules_dual_stack, remove_mangle_rules_dual_stack, 
+    cleanup_all_rules as cleanup_iptables
 )
 from policy_routing import (
     setup_default_gateway_routing, setup_wireguard_routing,
@@ -32,26 +33,39 @@ logger = logging.getLogger(__name__)
 
 def resolve_domain(domain: str) -> list[str]:
     """
-    Resolve a domain name to IP addresses.
+    Resolve a domain name to both IPv4 and IPv6 addresses.
     
     Args:
         domain: Domain name to resolve
     
     Returns:
-        List of IP addresses
+        List of IP addresses (both IPv4 and IPv6)
     """
     ips = []
+    
+    # Resolve IPv4 addresses
     try:
-        # Get all IP addresses for the domain
         results = socket.getaddrinfo(domain, None, socket.AF_INET)
         for result in results:
             ip = result[4][0]
             if ip not in ips:
                 ips.append(ip)
     except socket.gaierror as e:
-        logger.debug(f"Failed to resolve {domain}: {e}")
+        logger.debug(f"Failed to resolve IPv4 for {domain}: {e}")
     except Exception as e:
-        logger.error(f"Error resolving {domain}: {e}")
+        logger.error(f"Error resolving IPv4 for {domain}: {e}")
+    
+    # Resolve IPv6 addresses
+    try:
+        results = socket.getaddrinfo(domain, None, socket.AF_INET6)
+        for result in results:
+            ip = result[4][0]
+            if ip not in ips:
+                ips.append(ip)
+    except socket.gaierror as e:
+        logger.debug(f"Failed to resolve IPv6 for {domain}: {e}")
+    except Exception as e:
+        logger.error(f"Error resolving IPv6 for {domain}: {e}")
     
     return ips
 
@@ -192,7 +206,7 @@ class RoutingEngine:
 
     def apply_rule(self, rule: RoutingRule) -> tuple[bool, str]:
         """
-        Apply a single routing rule.
+        Apply a single routing rule with dual-stack (IPv4 + IPv6) support.
         
         Args:
             rule: RoutingRule to apply
@@ -202,21 +216,31 @@ class RoutingEngine:
         """
         logger.info(f"Applying rule: {rule.name} (domain: {rule.domain})")
         
-        ipset_name = get_ipset_name(rule.id)
+        ipset_name_v4 = get_ipset_name(rule.id)
+        ipset_name_v6 = get_ipset_name_v6(rule.id)
         
         try:
-            # Step 1: Create ipset
-            success, msg = create_ipset(ipset_name)
+            # Step 1: Create both IPv4 and IPv6 ipsets
+            success, msg = create_ipsets_for_rule(rule.id)
             if not success:
-                return self._mark_failed(rule, f"Failed to create ipset: {msg}")
+                return self._mark_failed(rule, f"Failed to create ipsets: {msg}")
             
-            # Step 2: Resolve domain and add IPs
+            # Step 2: Resolve domain and add IPs to appropriate ipsets
             ips = resolve_domain(rule.domain)
+            ipv4_count = 0
+            ipv6_count = 0
             for ip in ips:
-                add_ip_to_ipset(ipset_name, ip)
+                success, _ = add_ip_to_rule_ipset(rule.id, ip)
+                if success:
+                    if ':' in ip:
+                        ipv6_count += 1
+                    else:
+                        ipv4_count += 1
             
-            # Step 3: Add iptables mangle rules
-            success, msg = add_mangle_rule(ipset_name, rule.fwmark, rule.id)
+            logger.info(f"Resolved {ipv4_count} IPv4 and {ipv6_count} IPv6 addresses for {rule.domain}")
+            
+            # Step 3: Add iptables and ip6tables mangle rules
+            success, msg = add_mangle_rules_dual_stack(ipset_name_v4, ipset_name_v6, rule.fwmark, rule.id)
             if not success:
                 return self._mark_failed(rule, f"Failed to add iptables rules: {msg}")
             
@@ -258,14 +282,14 @@ class RoutingEngine:
             # Mark as active
             state = AppliedState(
                 rule_id=rule.id,
-                ipset_name=ipset_name,
+                ipset_name=ipset_name_v4,  # Store v4 name, v6 can be derived
                 applied_ips=json.dumps(ips),
                 status='active'
             )
             self.db.set_applied_state(state)
             
-            logger.info(f"Successfully applied rule: {rule.name}")
-            return True, f"Rule applied ({len(ips)} IPs resolved)"
+            logger.info(f"Successfully applied rule: {rule.name} ({ipv4_count} IPv4, {ipv6_count} IPv6)")
+            return True, f"Rule applied ({ipv4_count} IPv4, {ipv6_count} IPv6 addresses)"
             
         except Exception as e:
             logger.exception(f"Exception applying rule {rule.name}")
@@ -284,7 +308,7 @@ class RoutingEngine:
     
     def remove_rule(self, rule_id: int) -> tuple[bool, str]:
         """
-        Remove routing for a specific rule.
+        Remove routing for a specific rule (both IPv4 and IPv6).
         
         Args:
             rule_id: ID of the rule to remove
@@ -298,11 +322,12 @@ class RoutingEngine:
         
         logger.info(f"Removing rule: {rule.name}")
         
-        ipset_name = get_ipset_name(rule_id)
+        ipset_name_v4 = get_ipset_name(rule_id)
+        ipset_name_v6 = get_ipset_name_v6(rule_id)
         errors = []
         
-        # Remove iptables rules
-        success, msg = remove_mangle_rule(ipset_name, rule.fwmark, rule_id)
+        # Remove iptables and ip6tables rules
+        success, msg = remove_mangle_rules_dual_stack(ipset_name_v4, ipset_name_v6, rule.fwmark, rule_id)
         if not success:
             errors.append(f"iptables: {msg}")
         
@@ -311,8 +336,8 @@ class RoutingEngine:
         if not success:
             errors.append(f"routing: {msg}")
         
-        # Destroy ipset
-        success, msg = destroy_ipset(ipset_name)
+        # Destroy both ipsets
+        success, msg = destroy_ipsets_for_rule(rule_id)
         if not success:
             errors.append(f"ipset: {msg}")
         
@@ -350,16 +375,17 @@ class RoutingEngine:
         return results
     
     def _update_dnsmasq_config(self):
-        """Update dnsmasq configuration with current rules."""
+        """Update dnsmasq configuration with current rules (dual-stack)."""
         rules = self.db.get_enabled_rules()
         
-        # Build config data
+        # Build config data with both IPv4 and IPv6 ipset names
         config_rules = []
         for rule in rules:
             config_rules.append({
                 'name': rule.name,
                 'domain': rule.domain,
                 'ipset_name': get_ipset_name(rule.id),
+                'ipset_name_v6': get_ipset_name_v6(rule.id),
                 'enabled': rule.enabled
             })
         

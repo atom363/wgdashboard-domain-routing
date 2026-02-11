@@ -42,8 +42,18 @@ def run_command(cmd: list[str], check: bool = True) -> tuple[bool, str]:
 
 
 def get_ipset_name(rule_id: int) -> str:
-    """Generate ipset name for a rule."""
+    """Generate IPv4 ipset name for a rule."""
     return f"{IPSET_PREFIX}{rule_id}"
+
+
+def get_ipset_name_v6(rule_id: int) -> str:
+    """Generate IPv6 ipset name for a rule."""
+    return f"{IPSET_PREFIX}{rule_id}_v6"
+
+
+def is_ipv6(ip: str) -> bool:
+    """Check if an IP address is IPv6."""
+    return ':' in ip
 
 
 def ipset_exists(name: str) -> bool:
@@ -52,26 +62,26 @@ def ipset_exists(name: str) -> bool:
     return success
 
 
-def create_ipset(name: str) -> tuple[bool, str]:
+def create_ipset(name: str, family: str = 'inet') -> tuple[bool, str]:
     """
     Create a new ipset for storing IP addresses.
     
     Args:
         name: Name of the ipset to create
+        family: 'inet' for IPv4, 'inet6' for IPv6
     
     Returns:
         Tuple of (success, message)
     """
-    logger.info(f"Creating ipset: {name}")
+    logger.info(f"Creating ipset: {name} (family={family})")
     
     if ipset_exists(name):
         logger.debug(f"ipset {name} already exists")
         return True, "ipset already exists"
     
-    # Create hash:ip ipset for IPv4
     cmd = [
         'ipset', 'create', name, 'hash:ip',
-        'family', 'inet',
+        'family', family,
         'timeout', '0'  # No automatic timeout
     ]
     logger.info(f"Running: {' '.join(cmd)}")
@@ -84,6 +94,64 @@ def create_ipset(name: str) -> tuple[bool, str]:
         logger.error(f"Failed to create ipset {name}: {output}")
     
     return success, output
+
+
+def create_ipsets_for_rule(rule_id: int) -> tuple[bool, str]:
+    """
+    Create both IPv4 and IPv6 ipsets for a rule.
+    
+    Args:
+        rule_id: Rule ID
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    errors = []
+    
+    # Create IPv4 ipset
+    ipset_v4 = get_ipset_name(rule_id)
+    success, msg = create_ipset(ipset_v4, 'inet')
+    if not success:
+        errors.append(f"IPv4: {msg}")
+    
+    # Create IPv6 ipset
+    ipset_v6 = get_ipset_name_v6(rule_id)
+    success, msg = create_ipset(ipset_v6, 'inet6')
+    if not success:
+        errors.append(f"IPv6: {msg}")
+    
+    if errors:
+        return False, "; ".join(errors)
+    return True, "IPv4 and IPv6 ipsets created"
+
+
+def destroy_ipsets_for_rule(rule_id: int) -> tuple[bool, str]:
+    """
+    Destroy both IPv4 and IPv6 ipsets for a rule.
+    
+    Args:
+        rule_id: Rule ID
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    errors = []
+    
+    # Destroy IPv4 ipset
+    ipset_v4 = get_ipset_name(rule_id)
+    success, msg = destroy_ipset(ipset_v4)
+    if not success:
+        errors.append(f"IPv4: {msg}")
+    
+    # Destroy IPv6 ipset
+    ipset_v6 = get_ipset_name_v6(rule_id)
+    success, msg = destroy_ipset(ipset_v6)
+    if not success:
+        errors.append(f"IPv6: {msg}")
+    
+    if errors:
+        return False, "; ".join(errors)
+    return True, "IPv4 and IPv6 ipsets destroyed"
 
 
 def destroy_ipset(name: str) -> tuple[bool, str]:
@@ -156,6 +224,25 @@ def add_ip_to_ipset(name: str, ip: str) -> tuple[bool, str]:
         logger.debug(f"Added {ip} to ipset {name}")
     
     return success, output
+
+
+def add_ip_to_rule_ipset(rule_id: int, ip: str) -> tuple[bool, str]:
+    """
+    Add an IP to the appropriate ipset (IPv4 or IPv6) for a rule.
+    
+    Args:
+        rule_id: Rule ID
+        ip: IP address to add
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    if is_ipv6(ip):
+        ipset_name = get_ipset_name_v6(rule_id)
+    else:
+        ipset_name = get_ipset_name(rule_id)
+    
+    return add_ip_to_ipset(ipset_name, ip)
 
 
 def remove_ip_from_ipset(name: str, ip: str) -> tuple[bool, str]:

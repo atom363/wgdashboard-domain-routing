@@ -78,9 +78,10 @@ def validate_config(config_path: str) -> tuple[bool, str]:
 def generate_config(rules: list[dict], config_path: str = DEFAULT_CONFIG_PATH) -> tuple[bool, str]:
     """
     Generate dnsmasq configuration file with ipset directives.
+    Supports dual-stack by adding entries to both IPv4 and IPv6 ipsets.
     
     Args:
-        rules: List of routing rules with 'domain' and 'ipset_name' keys
+        rules: List of routing rules with 'domain', 'ipset_name', and 'ipset_name_v6' keys
         config_path: Path where to write the configuration
     
     Returns:
@@ -95,6 +96,7 @@ def generate_config(rules: list[dict], config_path: str = DEFAULT_CONFIG_PATH) -
         
         domain = rule.get('domain', '')
         ipset_name = rule.get('ipset_name', '')
+        ipset_name_v6 = rule.get('ipset_name_v6', '')
         rule_name = rule.get('name', 'Unknown')
         
         if not domain or not ipset_name:
@@ -108,8 +110,12 @@ def generate_config(rules: list[dict], config_path: str = DEFAULT_CONFIG_PATH) -
         for d in domains:
             d = d.strip()
             if d:
-                # dnsmasq ipset directive: ipset=/domain/ipset_name
-                lines.append(f"ipset=/{d}/{ipset_name}")
+                # dnsmasq ipset directive with both v4 and v6 ipsets
+                # Format: ipset=/domain/ipset_v4,ipset_v6
+                if ipset_name_v6:
+                    lines.append(f"ipset=/{d}/{ipset_name},{ipset_name_v6}")
+                else:
+                    lines.append(f"ipset=/{d}/{ipset_name}")
         
         lines.append("")
     

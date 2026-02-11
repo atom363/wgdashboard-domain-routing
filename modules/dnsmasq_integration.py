@@ -69,24 +69,6 @@ def is_dnsmasq_running() -> bool:
     return success
 
 
-def validate_config(config_path: str) -> tuple[bool, str]:
-    """
-    Validate dnsmasq configuration syntax.
-    
-    Args:
-        config_path: Path to configuration file
-    
-    Returns:
-        Tuple of (valid, message)
-    """
-    success, output = run_command(['dnsmasq', '--test'], check=False)
-    
-    if success or 'syntax check OK' in output:
-        return True, "Configuration valid"
-    
-    return False, output
-
-
 def generate_config(rules: list[dict], config_path: str = DEFAULT_CONFIG_PATH) -> tuple[bool, str]:
     """
     Generate dnsmasq configuration file with ipset directives.
@@ -150,12 +132,6 @@ def generate_config(rules: list[dict], config_path: str = DEFAULT_CONFIG_PATH) -
         return False, f"Permission denied writing to {config_path}"
     except Exception as e:
         return False, str(e)
-    
-    # Validate config
-    if is_dnsmasq_installed():
-        valid, msg = validate_config(config_path)
-        if not valid:
-            logger.warning(f"dnsmasq config validation warning: {msg}")
     
     return True, f"Config written to {config_path}"
 

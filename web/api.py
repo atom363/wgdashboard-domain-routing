@@ -335,6 +335,7 @@ def delete_rule(rule_id: int):
 def toggle_rule(rule_id: int):
     """Toggle a rule's enabled state."""
     db = get_db()
+    engine = get_routing_engine()
     
     new_state = db.toggle_rule(rule_id)
     if new_state is None:
@@ -342,6 +343,16 @@ def toggle_rule(rule_id: int):
             'status': False,
             'message': f'Rule {rule_id} not found'
         }), 404
+    
+    # If disabling, remove the rule from the system
+    if not new_state and engine:
+        engine.remove_rule(rule_id)
+    
+    # If enabling, apply the rule
+    if new_state and engine:
+        rule = db.get_rule_by_id(rule_id)
+        if rule:
+            engine.apply_rule(rule)
     
     return jsonify({
         'status': True,

@@ -20,6 +20,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Debug: Confirm module is being loaded
+logger.info("MODULE LOADED - main.py is being imported")
+
 
 def load_module_from_file(module_name: str, file_path: str):
     """Load a Python module from an absolute file path."""
@@ -68,7 +71,13 @@ def load_config(config_path: str) -> dict:
     if defaults['auth_enabled'] and not defaults['auth_token']:
         defaults['auth_token'] = generate_token()
         save_auth_token(config_path, defaults['auth_token'])
-        logger.info(f"Generated new auth token: {defaults['auth_token']}")
+        logger.info("=" * 50)
+        logger.info(f"GENERATED NEW AUTH TOKEN: {defaults['auth_token']}")
+        logger.info("=" * 50)
+    elif defaults['auth_enabled'] and defaults['auth_token']:
+        logger.info("=" * 50)
+        logger.info(f"USING EXISTING AUTH TOKEN: {defaults['auth_token']}")
+        logger.info("=" * 50)
     
     return defaults
 
@@ -95,7 +104,7 @@ def main(WireguardConfigurations: dict = None):
     Called by WGDashboard when the plugin is loaded.
     """
     logger.info("=" * 50)
-    logger.info("Domain Routing Plugin starting...")
+    logger.info("PLUGIN STARTING - CHECKING FOR AUTH TOKEN")
     logger.info("=" * 50)
     
     # Load modules using importlib with absolute paths
@@ -150,34 +159,59 @@ def main(WireguardConfigurations: dict = None):
     )
     
     # Create Flask application
+    print(f"[DomainRouting] Creating Flask app...", flush=True, file=sys.stderr)
     app_config = {
         'auth_enabled': config['auth_enabled'],
         'auth_token': config['auth_token']
     }
     
-    app = create_app(
-        config=app_config,
-        database=db,
-        wg_configs=WireguardConfigurations,
-        routing_engine=routing_engine
-    )
+    try:
+        app = create_app(
+            config=app_config,
+            database=db,
+            wg_configs=WireguardConfigurations,
+            routing_engine=routing_engine
+        )
+        print(f"[DomainRouting] Flask app created successfully", flush=True, file=sys.stderr)
+    except Exception as e:
+        print(f"[DomainRouting] ERROR creating Flask app: {e}", flush=True, file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return
     
     # Start routing engine in background
+    print(f"[DomainRouting] Starting routing engine...", flush=True, file=sys.stderr)
     routing_engine.start()
+    print(f"[DomainRouting] Routing engine started", flush=True, file=sys.stderr)
     
     # Print access info
-    logger.info("-" * 50)
-    logger.info(f"Web UI available at: http://{config['host']}:{config['port']}")
+    print(f"[DomainRouting] PLUGIN WEB UI: http://{config['host']}:{config['port']}", flush=True, file=sys.stderr)
     if config['auth_enabled'] and config['auth_token']:
-        logger.info(f"Access with token: http://{config['host']}:{config['port']}?token={config['auth_token']}")
-    logger.info("-" * 50)
+        print(f"[DomainRouting] AUTH TOKEN: {config['auth_token']}", flush=True, file=sys.stderr)
+        print(f"[DomainRouting] FULL URL: http://{config['host']}:{config['port']}?token={config['auth_token']}", flush=True, file=sys.stderr)
+    
+    logger.info("=" * 50)
+    logger.info("PLUGIN WEB UI ACCESS INFORMATION")
+    logger.info("=" * 50)
+    logger.info(f"URL: http://{config['host']}:{config['port']}")
+    if config['auth_enabled'] and config['auth_token']:
+        logger.info(f"Token: {config['auth_token']}")
+        logger.info(f"Full URL: http://{config['host']}:{config['port']}?token={config['auth_token']}")
+    else:
+        logger.info("Authentication: DISABLED")
+    logger.info("=" * 50)
     
     # Run Flask server (blocking)
+    print(f"[DomainRouting] Starting web server on {config['host']}:{config['port']}...", flush=True, file=sys.stderr)
     try:
         run_server(app, host=config['host'], port=config['port'])
     except Exception as e:
+        print(f"[DomainRouting] Web server error: {e}", flush=True, file=sys.stderr)
         logger.error(f"Web server error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
+        print(f"[DomainRouting] Shutting down...", flush=True, file=sys.stderr)
         logger.info("Shutting down routing engine...")
         routing_engine.stop()
         logger.info("Domain Routing Plugin stopped")

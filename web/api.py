@@ -41,7 +41,10 @@ def get_status():
             'engine_status': engine_status,
             'total_rules': stats['total_rules'],
             'enabled_rules': stats['enabled_rules'],
-            'active_rules': stats['active_rules']
+            'active_rules': stats['active_rules'],
+            'total_static_routes': stats['total_static_routes'],
+            'enabled_static_routes': stats['enabled_static_routes'],
+            'active_static_routes': stats['active_static_routes']
         }
     })
 
@@ -240,6 +243,11 @@ def create_rule():
     )
     
     rule = db.create_rule(rule)
+    
+    # Apply the rule if enabled
+    engine = get_routing_engine()
+    if engine and rule.enabled:
+        engine.apply_rule(rule)
     
     return jsonify({
         'status': True,

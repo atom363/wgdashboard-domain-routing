@@ -118,6 +118,53 @@ class ApiClient {
             method: 'POST'
         });
     }
+
+    // Static Routes
+    async getStaticRoutes() {
+        return this.request('/api/static-routes');
+    }
+
+    async getStaticRoute(routeId) {
+        return this.request(`/api/static-routes/${routeId}`);
+    }
+
+    async createStaticRoute(route) {
+        return this.request('/api/static-routes', {
+            method: 'POST',
+            body: JSON.stringify(route)
+        });
+    }
+
+    async updateStaticRoute(routeId, route) {
+        return this.request(`/api/static-routes/${routeId}`, {
+            method: 'PUT',
+            body: JSON.stringify(route)
+        });
+    }
+
+    async deleteStaticRoute(routeId) {
+        return this.request(`/api/static-routes/${routeId}`, {
+            method: 'DELETE'
+        });
+    }
+
+    async toggleStaticRoute(routeId) {
+        return this.request(`/api/static-routes/${routeId}/toggle`, {
+            method: 'POST'
+        });
+    }
+
+    async applyStaticRoute(routeId) {
+        return this.request(`/api/static-routes/${routeId}/apply`, {
+            method: 'POST'
+        });
+    }
+
+    async applyAllStaticRoutes() {
+        return this.request('/api/static-routes/apply-all', {
+            method: 'POST'
+        });
+    }
 }
 
 // Export singleton instance

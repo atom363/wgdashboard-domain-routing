@@ -16,15 +16,37 @@
             </div>
         </header>
 
-        <div class="toolbar">
-            <button id="btn-add-rule" class="btn btn-primary">+ Add Rule</button>
-            <button id="btn-refresh" class="btn">Refresh</button>
-            <button id="btn-apply-all" class="btn">Apply All</button>
-            <button id="btn-cleanup" class="btn btn-danger">Cleanup All</button>
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="domain-rules">Domain Rules</button>
+            <button class="tab-btn" data-tab="static-routes">Static Routes</button>
         </div>
 
-        <div id="rules-list" class="rules-list">
-            <div class="loading">Loading rules...</div>
+        <!-- Domain Rules Tab -->
+        <div id="domain-rules-tab" class="tab-content active">
+            <div class="toolbar">
+                <button id="btn-add-rule" class="btn btn-primary">+ Add Rule</button>
+                <button id="btn-refresh" class="btn">Refresh</button>
+                <button id="btn-apply-all" class="btn">Apply All</button>
+                <button id="btn-cleanup" class="btn btn-danger">Cleanup All</button>
+            </div>
+
+            <div id="rules-list" class="rules-list">
+                <div class="loading">Loading rules...</div>
+            </div>
+        </div>
+
+        <!-- Static Routes Tab -->
+        <div id="static-routes-tab" class="tab-content">
+            <div class="toolbar">
+                <button id="btn-add-static-route" class="btn btn-primary">+ Add Static Route</button>
+                <button id="btn-refresh-static" class="btn">Refresh</button>
+                <button id="btn-apply-all-static" class="btn">Apply All</button>
+            </div>
+
+            <div id="static-routes-list" class="rules-list">
+                <div class="loading">Loading static routes...</div>
+            </div>
         </div>
 
         <!-- Add/Edit Rule Modal -->
@@ -91,6 +113,82 @@
             </div>
         </div>
 
+        <!-- Add/Edit Static Route Modal -->
+        <div id="static-route-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="static-modal-title">Add Static Route</h2>
+                    <button class="btn-close" id="btn-close-static-modal">&times;</button>
+                </div>
+                <form id="static-route-form">
+                    <input type="hidden" id="static-route-id">
+                    
+                    <div class="form-group">
+                        <label for="static-route-name">Route Name</label>
+                        <input type="text" id="static-route-name" required placeholder="e.g., Office Network">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="static-route-destination">Destination (IP/CIDR)</label>
+                        <input type="text" id="static-route-destination" required placeholder="e.g., 192.168.10.0/24 or 2001:db8::/64">
+                        <small>Enter destination network in CIDR notation</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="static-route-target-type">Target Type</label>
+                        <select id="static-route-target-type" required>
+                            <option value="default_gateway">Default Gateway</option>
+                            <option value="wireguard_peer">WireGuard Peer</option>
+                            <option value="interface">Network Interface</option>
+                        </select>
+                    </div>
+                    
+                    <div id="static-wg-target-section" class="form-group hidden">
+                        <label for="static-route-target-config">WireGuard Configuration</label>
+                        <select id="static-route-target-config">
+                            <option value="">Select configuration...</option>
+                        </select>
+                    </div>
+                    
+                    <div id="static-wg-peer-section" class="form-group hidden">
+                        <label for="static-route-target-peer">WireGuard Peer (optional)</label>
+                        <select id="static-route-target-peer">
+                            <option value="">Any peer</option>
+                        </select>
+                    </div>
+                    
+                    <div id="static-interface-section" class="form-group hidden">
+                        <label for="static-route-interface">Interface Name</label>
+                        <input type="text" id="static-route-interface" placeholder="e.g., eth0, wg0">
+                    </div>
+                    
+                    <div id="static-gateway-section" class="form-group hidden">
+                        <label for="static-route-gateway">Gateway IP (optional)</label>
+                        <input type="text" id="static-route-gateway" placeholder="e.g., 192.168.1.1">
+                        <small>Leave empty to use default gateway detection</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="static-route-priority">Priority</label>
+                        <input type="number" id="static-route-priority" value="100" min="1" max="999">
+                        <small>Lower number = higher priority</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="static-route-enabled" checked>
+                            Enabled
+                        </label>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="button" class="btn" id="btn-cancel-static">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Route</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <!-- Delete Confirmation Modal -->
         <div id="delete-modal" class="modal hidden">
             <div class="modal-content modal-small">
@@ -102,6 +200,21 @@
                 <div class="form-actions">
                     <button type="button" class="btn" id="btn-cancel-delete">Cancel</button>
                     <button type="button" class="btn btn-danger" id="btn-confirm-delete">Delete</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Delete Static Route Confirmation Modal -->
+        <div id="delete-static-modal" class="modal hidden">
+            <div class="modal-content modal-small">
+                <div class="modal-header">
+                    <h2>Confirm Delete</h2>
+                </div>
+                <p>Are you sure you want to delete this static route?</p>
+                <p id="delete-static-route-name" class="text-bold"></p>
+                <div class="form-actions">
+                    <button type="button" class="btn" id="btn-cancel-delete-static">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="btn-confirm-delete-static">Delete</button>
                 </div>
             </div>
         </div>

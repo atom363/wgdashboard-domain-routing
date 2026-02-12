@@ -42,6 +42,27 @@ class AppliedState:
     last_applied: Optional[str] = None
 
 
+@dataclass
+class StaticRoute:
+    """Represents a static IP route (not domain-based)."""
+    id: Optional[int] = None
+    name: str = ""
+    destination: str = ""  # IP/CIDR (e.g., "192.168.1.0/24" or "2001:db8::/64")
+    gateway: Optional[str] = None  # Gateway IP (optional, uses interface if not set)
+    interface: Optional[str] = None  # Outgoing interface (e.g., "wg0", "eth0")
+    target_type: str = "default_gateway"  # "default_gateway", "wireguard_peer", or "interface"
+    target_config: Optional[str] = None   # WG config name for wireguard_peer
+    target_peer: Optional[str] = None     # Peer public key for wireguard_peer
+    enabled: bool = True
+    priority: int = 100
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return asdict(self)
+
+
 class Database:
     """Database manager for routing rules."""
 
@@ -104,6 +125,35 @@ class Database:
             CREATE TABLE IF NOT EXISTS plugin_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )
+        """)
+
+        # Create static_routes table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS static_routes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                destination TEXT NOT NULL,
+                gateway TEXT,
+                interface TEXT,
+                target_type TEXT NOT NULL DEFAULT 'default_gateway',
+                target_config TEXT,
+                target_peer TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 100,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Create static_route_applied_state table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS static_route_applied_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                route_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                last_applied TEXT,
+                FOREIGN KEY (route_id) REFERENCES static_routes(id) ON DELETE CASCADE
             )
         """)
 
@@ -224,6 +274,188 @@ class Database:
         conn.close()
         return bool(new_enabled)
 
+    # CRUD Operations for Static Routes
+
+    def get_all_static_routes(self) -> list[StaticRoute]:
+        """Get all static routes."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM static_routes ORDER BY priority ASC, id ASC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [self._row_to_static_route(row) for row in rows]
+
+    def get_enabled_static_routes(self) -> list[StaticRoute]:
+        """Get all enabled static routes."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM static_routes WHERE enabled = 1 ORDER BY priority ASC, id ASC"
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [self._row_to_static_route(row) for row in rows]
+
+    def get_static_route_by_id(self, route_id: int) -> Optional[StaticRoute]:
+        """Get a static route by ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM static_routes WHERE id = ?", (route_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return self._row_to_static_route(row) if row else None
+
+    def create_static_route(self, route: StaticRoute) -> StaticRoute:
+        """Create a new static route."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+
+        cursor.execute("""
+            INSERT INTO static_routes 
+            (name, destination, gateway, interface, target_type, target_config, target_peer, enabled, priority, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            route.name, route.destination, route.gateway, route.interface,
+            route.target_type, route.target_config, route.target_peer,
+            1 if route.enabled else 0, route.priority, now, now
+        ))
+
+        route.id = cursor.lastrowid
+        route.created_at = now
+        route.updated_at = now
+        conn.commit()
+        conn.close()
+        return route
+
+    def update_static_route(self, route: StaticRoute) -> bool:
+        """Update an existing static route."""
+        if route.id is None:
+            return False
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+
+        cursor.execute("""
+            UPDATE static_routes SET
+                name = ?, destination = ?, gateway = ?, interface = ?,
+                target_type = ?, target_config = ?, target_peer = ?, enabled = ?,
+                priority = ?, updated_at = ?
+            WHERE id = ?
+        """, (
+            route.name, route.destination, route.gateway, route.interface,
+            route.target_type, route.target_config, route.target_peer,
+            1 if route.enabled else 0, route.priority, now, route.id
+        ))
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def delete_static_route(self, route_id: int) -> bool:
+        """Delete a static route."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Delete applied state first
+        cursor.execute("DELETE FROM static_route_applied_state WHERE route_id = ?", (route_id,))
+        cursor.execute("DELETE FROM static_routes WHERE id = ?", (route_id,))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def toggle_static_route(self, route_id: int) -> Optional[bool]:
+        """Toggle a static route's enabled state. Returns new enabled state."""
+        route = self.get_static_route_by_id(route_id)
+        if not route:
+            return None
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        new_enabled = 0 if route.enabled else 1
+        now = datetime.now().isoformat()
+
+        cursor.execute(
+            "UPDATE static_routes SET enabled = ?, updated_at = ? WHERE id = ?",
+            (new_enabled, now, route_id)
+        )
+        conn.commit()
+        conn.close()
+        return bool(new_enabled)
+
+    # Static Route Applied State Operations
+
+    def get_static_route_applied_state(self, route_id: int) -> Optional[dict]:
+        """Get the applied state for a static route."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM static_route_applied_state WHERE route_id = ?", (route_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {
+                'id': row['id'],
+                'route_id': row['route_id'],
+                'status': row['status'],
+                'last_applied': row['last_applied']
+            }
+        return None
+
+    def set_static_route_applied_state(self, route_id: int, status: str) -> dict:
+        """Create or update applied state for a static route."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+
+        # Check if state exists
+        cursor.execute("SELECT id FROM static_route_applied_state WHERE route_id = ?", (route_id,))
+        existing = cursor.fetchone()
+
+        if existing:
+            cursor.execute("""
+                UPDATE static_route_applied_state SET
+                    status = ?, last_applied = ?
+                WHERE route_id = ?
+            """, (status, now, route_id))
+            route_state_id = existing['id']
+        else:
+            cursor.execute("""
+                INSERT INTO static_route_applied_state (route_id, status, last_applied)
+                VALUES (?, ?, ?)
+            """, (route_id, status, now))
+            route_state_id = cursor.lastrowid
+
+        conn.commit()
+        conn.close()
+        return {
+            'id': route_state_id,
+            'route_id': route_id,
+            'status': status,
+            'last_applied': now
+        }
+
+    def delete_static_route_applied_state(self, route_id: int) -> bool:
+        """Delete applied state for a static route."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM static_route_applied_state WHERE route_id = ?", (route_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def clear_all_static_route_applied_states(self):
+        """Clear all static route applied states."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM static_route_applied_state")
+        conn.commit()
+        conn.close()
+
     # Applied State Operations
 
     def get_applied_state(self, rule_id: int) -> Optional[AppliedState]:
@@ -342,6 +574,23 @@ class Database:
             last_applied=row['last_applied']
         )
 
+    def _row_to_static_route(self, row: sqlite3.Row) -> StaticRoute:
+        """Convert a database row to a StaticRoute."""
+        return StaticRoute(
+            id=row['id'],
+            name=row['name'],
+            destination=row['destination'],
+            gateway=row['gateway'],
+            interface=row['interface'],
+            target_type=row['target_type'],
+            target_config=row['target_config'],
+            target_peer=row['target_peer'],
+            enabled=bool(row['enabled']),
+            priority=row['priority'],
+            created_at=row['created_at'],
+            updated_at=row['updated_at']
+        )
+
     def get_next_fwmark(self) -> int:
         """Get the next available fwmark value."""
         conn = self._get_connection()
@@ -366,10 +615,22 @@ class Database:
         cursor.execute("SELECT COUNT(*) as active FROM applied_state WHERE status = 'active'")
         active_rules = cursor.fetchone()['active']
         
+        cursor.execute("SELECT COUNT(*) as total FROM static_routes")
+        total_static_routes = cursor.fetchone()['total']
+        
+        cursor.execute("SELECT COUNT(*) as enabled FROM static_routes WHERE enabled = 1")
+        enabled_static_routes = cursor.fetchone()['enabled']
+        
+        cursor.execute("SELECT COUNT(*) as active FROM static_route_applied_state WHERE status = 'active'")
+        active_static_routes = cursor.fetchone()['active']
+        
         conn.close()
         
         return {
             'total_rules': total_rules,
             'enabled_rules': enabled_rules,
-            'active_rules': active_rules
+            'active_rules': active_rules,
+            'total_static_routes': total_static_routes,
+            'enabled_static_routes': enabled_static_routes,
+            'active_static_routes': active_static_routes
         }

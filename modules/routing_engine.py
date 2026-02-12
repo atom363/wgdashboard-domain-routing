@@ -10,7 +10,7 @@ import threading
 from time import sleep, time
 from typing import Optional
 
-from database import Database, RoutingRule, AppliedState
+from database import Database, RoutingRule, AppliedState, StaticRoute
 from ipset_manager import (
     get_ipset_name, get_ipset_name_v6, create_ipsets_for_rule, destroy_ipsets_for_rule, 
     add_ip_to_rule_ipset, list_ipset_entries, cleanup_all_ipsets
@@ -21,7 +21,8 @@ from iptables_manager import (
 )
 from policy_routing import (
     setup_default_gateway_routing, setup_wireguard_routing,
-    cleanup_routing, get_default_gateway
+    cleanup_routing, get_default_gateway,
+    add_static_route, remove_static_route, add_static_route_via_wireguard
 )
 from dnsmasq_integration import (
     update_and_reload as update_dnsmasq, cleanup as cleanup_dnsmasq
@@ -434,13 +435,18 @@ class RoutingEngine:
             logger.info("dnsmasq config updated and restarted")
     
     def cleanup_all(self):
-        """Remove all applied routing rules from the system."""
-        logger.info("Cleaning up all routing rules...")
+        """Remove all applied routing rules and static routes from the system."""
+        logger.info("Cleaning up all routing rules and static routes...")
         
-        # Get all rules and remove them
+        # Get all domain routing rules and remove them
         rules = self.db.get_all_rules()
         for rule in rules:
             self.remove_rule(rule.id)
+        
+        # Get all static routes and remove them
+        static_routes = self.db.get_all_static_routes()
+        for route in static_routes:
+            self.remove_static_route(route.id)
         
         # Additional cleanup for any orphaned resources
         cleanup_all_ipsets()
@@ -449,6 +455,7 @@ class RoutingEngine:
         
         # Clear all applied states
         self.db.clear_all_applied_states()
+        self.db.clear_all_static_route_applied_states()
         
         logger.info("Cleanup complete")
     
@@ -481,4 +488,176 @@ class RoutingEngine:
             'current_ips': current_ips,
             'applied_ips': json.loads(state.applied_ips) if state else [],
             'last_applied': state.last_applied if state else None
+        }
+    
+    # Static Route Methods
+    
+    def apply_static_route(self, route: StaticRoute) -> tuple[bool, str]:
+        """
+        Apply a static route.
+        
+        Args:
+            route: StaticRoute to apply
+        
+        Returns:
+            Tuple of (success, message)
+        """
+        logger.info(f"Applying static route: {route.name} (destination: {route.destination})")
+        
+        try:
+            if route.target_type == 'default_gateway':
+                # Route through default gateway
+                gateway, interface = get_default_gateway()
+                if not interface:
+                    self.db.set_static_route_applied_state(route.id, 'failed')
+                    return False, "Could not detect default gateway"
+                
+                success, msg = add_static_route(route.destination, gateway or route.gateway, interface)
+                if not success:
+                    self.db.set_static_route_applied_state(route.id, 'failed')
+                    return False, msg
+                    
+            elif route.target_type == 'wireguard_peer':
+                # Route through WireGuard peer
+                wg_interface = self.wg.get_interface_name(route.target_config)
+                if not wg_interface:
+                    self.db.set_static_route_applied_state(route.id, 'failed')
+                    return False, f"WireGuard config {route.target_config} not found"
+                
+                # Get peer gateway IPs
+                ipv4_gateway = None
+                ipv6_gateway = None
+                
+                if route.target_peer:
+                    peer = self.wg.get_peer(route.target_config, route.target_peer)
+                    if peer:
+                        ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peer.get('allowed_ip', ''))
+                else:
+                    peers = self.wg.list_peers(route.target_config)
+                    if peers:
+                        ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peers[0].get('allowed_ip', ''))
+                
+                success, msg = add_static_route_via_wireguard(
+                    route.destination, wg_interface, ipv4_gateway, ipv6_gateway
+                )
+                if not success:
+                    self.db.set_static_route_applied_state(route.id, 'failed')
+                    return False, msg
+                    
+            elif route.target_type == 'interface':
+                # Route through specific interface
+                interface = route.interface or route.target_config
+                if not interface:
+                    self.db.set_static_route_applied_state(route.id, 'failed')
+                    return False, "No interface specified"
+                
+                success, msg = add_static_route(route.destination, route.gateway, interface)
+                if not success:
+                    self.db.set_static_route_applied_state(route.id, 'failed')
+                    return False, msg
+            else:
+                return False, f"Unknown target type: {route.target_type}"
+            
+            # Mark as active
+            self.db.set_static_route_applied_state(route.id, 'active')
+            logger.info(f"Successfully applied static route: {route.name}")
+            return True, "Static route applied"
+            
+        except Exception as e:
+            logger.exception(f"Exception applying static route {route.name}")
+            self.db.set_static_route_applied_state(route.id, 'failed')
+            return False, str(e)
+    
+    def remove_static_route(self, route_id: int) -> tuple[bool, str]:
+        """
+        Remove a static route.
+        
+        Args:
+            route_id: ID of the route to remove
+        
+        Returns:
+            Tuple of (success, message)
+        """
+        route = self.db.get_static_route_by_id(route_id)
+        if not route:
+            return False, "Static route not found"
+        
+        logger.info(f"Removing static route: {route.name}")
+        
+        # Determine gateway and interface based on target type
+        gateway = route.gateway
+        interface = route.interface
+        
+        if route.target_type == 'default_gateway':
+            gateway, interface = get_default_gateway()
+        elif route.target_type == 'wireguard_peer':
+            interface = self.wg.get_interface_name(route.target_config)
+            # Get peer gateway for this destination type
+            if route.target_peer:
+                peer = self.wg.get_peer(route.target_config, route.target_peer)
+                if peer:
+                    ipv4_gw, ipv6_gw = self._parse_peer_gateways(peer.get('allowed_ip', ''))
+                    gateway = ipv6_gw if ':' in route.destination else ipv4_gw
+            else:
+                peers = self.wg.list_peers(route.target_config)
+                if peers:
+                    ipv4_gw, ipv6_gw = self._parse_peer_gateways(peers[0].get('allowed_ip', ''))
+                    gateway = ipv6_gw if ':' in route.destination else ipv4_gw
+        elif route.target_type == 'interface':
+            interface = route.interface or route.target_config
+        
+        success, msg = remove_static_route(route.destination, gateway, interface)
+        
+        # Remove applied state
+        self.db.delete_static_route_applied_state(route_id)
+        
+        if success:
+            logger.info(f"Successfully removed static route: {route.name}")
+        
+        return success, msg
+    
+    def apply_all_static_routes(self) -> dict:
+        """
+        Apply all enabled static routes.
+        
+        Returns:
+            Dictionary with success/failed counts
+        """
+        routes = self.db.get_enabled_static_routes()
+        results = {'success': 0, 'failed': 0, 'errors': []}
+        
+        for route in routes:
+            success, msg = self.apply_static_route(route)
+            if success:
+                results['success'] += 1
+            else:
+                results['failed'] += 1
+                results['errors'].append(f"{route.name}: {msg}")
+        
+        logger.info(f"Applied {results['success']} static routes, {results['failed']} failed")
+        return results
+    
+    def get_static_route_status(self, route_id: int) -> dict:
+        """
+        Get detailed status of a static route.
+        
+        Args:
+            route_id: Route ID
+        
+        Returns:
+            Status dictionary
+        """
+        route = self.db.get_static_route_by_id(route_id)
+        if not route:
+            return {'error': 'Static route not found'}
+        
+        state = self.db.get_static_route_applied_state(route_id)
+        
+        return {
+            'route_id': route_id,
+            'route_name': route.name,
+            'destination': route.destination,
+            'enabled': route.enabled,
+            'status': state['status'] if state else 'not_applied',
+            'last_applied': state['last_applied'] if state else None
         }

@@ -354,3 +354,173 @@ def list_plugin_rules() -> list[dict]:
                 })
     
     return rules
+
+
+# Static Route Functions
+
+def is_ipv6(destination: str) -> bool:
+    """Check if a destination is IPv6."""
+    return ':' in destination
+
+
+def static_route_exists(destination: str, gateway: Optional[str], interface: Optional[str]) -> bool:
+    """
+    Check if a static route already exists.
+    
+    Args:
+        destination: Destination network (e.g., "192.168.1.0/24")
+        gateway: Gateway IP (optional)
+        interface: Network interface (optional)
+    
+    Returns:
+        True if route exists
+    """
+    ip_version = '-6' if is_ipv6(destination) else '-4'
+    success, output = run_command(['ip', ip_version, 'route', 'show', destination], check=False)
+    
+    if not success or not output:
+        return False
+    
+    # Check if the route matches our parameters
+    if gateway and gateway not in output:
+        return False
+    if interface and f"dev {interface}" not in output:
+        return False
+    
+    return True
+
+
+def add_static_route(destination: str, gateway: Optional[str], interface: Optional[str]) -> tuple[bool, str]:
+    """
+    Add a static route to the main routing table.
+    
+    Args:
+        destination: Destination network (e.g., "192.168.1.0/24" or "2001:db8::/64")
+        gateway: Gateway IP (optional, uses interface if not set)
+        interface: Network interface (optional)
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    if static_route_exists(destination, gateway, interface):
+        logger.debug(f"Static route to {destination} already exists")
+        return True, "Route already exists"
+    
+    ip_version = '-6' if is_ipv6(destination) else '-4'
+    cmd = ['ip', ip_version, 'route', 'add', destination]
+    
+    if gateway:
+        cmd.extend(['via', gateway])
+    if interface:
+        cmd.extend(['dev', interface])
+    
+    success, output = run_command(cmd)
+    
+    if success:
+        route_desc = f"{destination}"
+        if gateway:
+            route_desc += f" via {gateway}"
+        if interface:
+            route_desc += f" dev {interface}"
+        logger.info(f"Added static route: {route_desc}")
+        return True, f"Route added: {route_desc}"
+    else:
+        logger.error(f"Failed to add static route to {destination}: {output}")
+        return False, output
+
+
+def remove_static_route(destination: str, gateway: Optional[str], interface: Optional[str]) -> tuple[bool, str]:
+    """
+    Remove a static route from the main routing table.
+    
+    Args:
+        destination: Destination network (e.g., "192.168.1.0/24")
+        gateway: Gateway IP (optional)
+        interface: Network interface (optional)
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    ip_version = '-6' if is_ipv6(destination) else '-4'
+    cmd = ['ip', ip_version, 'route', 'del', destination]
+    
+    if gateway:
+        cmd.extend(['via', gateway])
+    if interface:
+        cmd.extend(['dev', interface])
+    
+    success, output = run_command(cmd, check=False)
+    
+    if success:
+        logger.info(f"Removed static route to {destination}")
+        return True, f"Route to {destination} removed"
+    
+    # Route might not exist, which is fine
+    if "No such process" in output or "not in table" in output:
+        return True, "Route did not exist"
+    
+    return False, output
+
+
+def add_static_route_via_wireguard(destination: str, wg_interface: str,
+                                   ipv4_gateway: Optional[str] = None,
+                                   ipv6_gateway: Optional[str] = None) -> tuple[bool, str]:
+    """
+    Add a static route through a WireGuard interface.
+    
+    Args:
+        destination: Destination network
+        wg_interface: WireGuard interface name
+        ipv4_gateway: IPv4 gateway (for IPv4 destinations)
+        ipv6_gateway: IPv6 gateway (for IPv6 destinations)
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    # Determine which gateway to use based on destination
+    if is_ipv6(destination):
+        gateway = ipv6_gateway
+    else:
+        gateway = ipv4_gateway
+    
+    return add_static_route(destination, gateway, wg_interface)
+
+
+def list_static_routes() -> list[dict]:
+    """
+    List all static routes in the main routing table.
+    
+    Returns:
+        List of route dictionaries
+    """
+    routes = []
+    
+    # Get IPv4 routes
+    success, output = run_command(['ip', '-4', 'route', 'show'], check=False)
+    if success:
+        for line in output.split('\n'):
+            # Parse: "192.168.10.0/24 via 192.168.1.1 dev eth0"
+            # or: "192.168.10.0/24 dev wg0"
+            match = re.match(r'(\S+)\s+(?:via\s+(\S+)\s+)?dev\s+(\S+)', line)
+            if match:
+                routes.append({
+                    'destination': match.group(1),
+                    'gateway': match.group(2),
+                    'interface': match.group(3),
+                    'family': 'inet'
+                })
+    
+    # Get IPv6 routes
+    success, output = run_command(['ip', '-6', 'route', 'show'], check=False)
+    if success:
+        for line in output.split('\n'):
+            match = re.match(r'(\S+)\s+(?:via\s+(\S+)\s+)?dev\s+(\S+)', line)
+            if match:
+                routes.append({
+                    'destination': match.group(1),
+                    'gateway': match.group(2),
+                    'interface': match.group(3),
+                    'family': 'inet6'
+                })
+    
+    return routes

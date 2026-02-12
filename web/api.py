@@ -415,3 +415,290 @@ def cleanup_rules():
         'status': True,
         'message': 'All routing rules cleaned up'
     })
+
+
+# Static Routes API
+
+@api.route('/static-routes', methods=['GET'])
+@auth_required
+def get_static_routes():
+    """List all static routes."""
+    db = get_db()
+    routes = db.get_all_static_routes()
+    
+    # Include applied state for each route
+    routes_data = []
+    for route in routes:
+        route_dict = route.to_dict()
+        state = db.get_static_route_applied_state(route.id)
+        route_dict['applied_state'] = {
+            'status': state['status'] if state else 'not_applied',
+            'last_applied': state['last_applied'] if state else None
+        }
+        routes_data.append(route_dict)
+    
+    return jsonify({
+        'status': True,
+        'data': routes_data
+    })
+
+
+@api.route('/static-routes/<int:route_id>', methods=['GET'])
+@auth_required
+def get_static_route(route_id: int):
+    """Get a single static route."""
+    db = get_db()
+    route = db.get_static_route_by_id(route_id)
+    
+    if not route:
+        return jsonify({
+            'status': False,
+            'message': f'Static route {route_id} not found'
+        }), 404
+    
+    route_dict = route.to_dict()
+    state = db.get_static_route_applied_state(route.id)
+    route_dict['applied_state'] = {
+        'status': state['status'] if state else 'not_applied',
+        'last_applied': state['last_applied'] if state else None
+    }
+    
+    return jsonify({
+        'status': True,
+        'data': route_dict
+    })
+
+
+@api.route('/static-routes', methods=['POST'])
+@auth_required
+def create_static_route():
+    """Create a new static route."""
+    from database import StaticRoute
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({
+            'status': False,
+            'message': 'No JSON data provided'
+        }), 400
+    
+    # Validate required fields
+    required = ['name', 'destination', 'target_type']
+    missing = [f for f in required if not data.get(f)]
+    if missing:
+        return jsonify({
+            'status': False,
+            'message': f'Missing required fields: {", ".join(missing)}'
+        }), 400
+    
+    # Validate target_type
+    if data['target_type'] not in ['default_gateway', 'wireguard_peer', 'interface']:
+        return jsonify({
+            'status': False,
+            'message': 'target_type must be "default_gateway", "wireguard_peer", or "interface"'
+        }), 400
+    
+    # Validate WireGuard peer target
+    if data['target_type'] == 'wireguard_peer' and not data.get('target_config'):
+        return jsonify({
+            'status': False,
+            'message': 'target_config is required for wireguard_peer target'
+        }), 400
+    
+    db = get_db()
+    
+    route = StaticRoute(
+        name=data['name'],
+        destination=data['destination'],
+        gateway=data.get('gateway'),
+        interface=data.get('interface'),
+        target_type=data['target_type'],
+        target_config=data.get('target_config'),
+        target_peer=data.get('target_peer'),
+        enabled=data.get('enabled', True),
+        priority=data.get('priority', 100)
+    )
+    
+    route = db.create_static_route(route)
+    
+    # Apply the route if enabled
+    engine = get_routing_engine()
+    if engine and route.enabled:
+        engine.apply_static_route(route)
+    
+    return jsonify({
+        'status': True,
+        'message': 'Static route created successfully',
+        'data': route.to_dict()
+    }), 201
+
+
+@api.route('/static-routes/<int:route_id>', methods=['PUT'])
+@auth_required
+def update_static_route(route_id: int):
+    """Update an existing static route."""
+    db = get_db()
+    route = db.get_static_route_by_id(route_id)
+    
+    if not route:
+        return jsonify({
+            'status': False,
+            'message': f'Static route {route_id} not found'
+        }), 404
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({
+            'status': False,
+            'message': 'No JSON data provided'
+        }), 400
+    
+    # Update fields
+    if 'name' in data:
+        route.name = data['name']
+    if 'destination' in data:
+        route.destination = data['destination']
+    if 'gateway' in data:
+        route.gateway = data['gateway']
+    if 'interface' in data:
+        route.interface = data['interface']
+    if 'target_type' in data:
+        route.target_type = data['target_type']
+    if 'target_config' in data:
+        route.target_config = data['target_config']
+    if 'target_peer' in data:
+        route.target_peer = data['target_peer']
+    if 'enabled' in data:
+        route.enabled = data['enabled']
+    if 'priority' in data:
+        route.priority = data['priority']
+    
+    if db.update_static_route(route):
+        # Re-apply the route if it's enabled
+        engine = get_routing_engine()
+        if engine:
+            # Remove old route first
+            engine.remove_static_route(route_id)
+            # Apply new route if enabled
+            if route.enabled:
+                engine.apply_static_route(route)
+        
+        return jsonify({
+            'status': True,
+            'message': 'Static route updated successfully',
+            'data': route.to_dict()
+        })
+    else:
+        return jsonify({
+            'status': False,
+            'message': 'Failed to update static route'
+        }), 500
+
+
+@api.route('/static-routes/<int:route_id>', methods=['DELETE'])
+@auth_required
+def delete_static_route(route_id: int):
+    """Delete a static route."""
+    db = get_db()
+    
+    if not db.get_static_route_by_id(route_id):
+        return jsonify({
+            'status': False,
+            'message': f'Static route {route_id} not found'
+        }), 404
+    
+    # Remove applied route before deleting
+    engine = get_routing_engine()
+    if engine:
+        engine.remove_static_route(route_id)
+    
+    if db.delete_static_route(route_id):
+        return jsonify({
+            'status': True,
+            'message': 'Static route deleted successfully'
+        })
+    else:
+        return jsonify({
+            'status': False,
+            'message': 'Failed to delete static route'
+        }), 500
+
+
+@api.route('/static-routes/<int:route_id>/toggle', methods=['POST'])
+@auth_required
+def toggle_static_route(route_id: int):
+    """Toggle a static route's enabled state."""
+    db = get_db()
+    
+    new_state = db.toggle_static_route(route_id)
+    if new_state is None:
+        return jsonify({
+            'status': False,
+            'message': f'Static route {route_id} not found'
+        }), 404
+    
+    # Apply or remove the route based on new state
+    engine = get_routing_engine()
+    if engine:
+        if new_state:
+            route = db.get_static_route_by_id(route_id)
+            if route:
+                engine.apply_static_route(route)
+        else:
+            engine.remove_static_route(route_id)
+    
+    return jsonify({
+        'status': True,
+        'message': f'Static route {"enabled" if new_state else "disabled"} successfully',
+        'data': {'enabled': new_state}
+    })
+
+
+@api.route('/static-routes/<int:route_id>/apply', methods=['POST'])
+@auth_required
+def apply_static_route_endpoint(route_id: int):
+    """Force apply a single static route."""
+    db = get_db()
+    route = db.get_static_route_by_id(route_id)
+    
+    if not route:
+        return jsonify({
+            'status': False,
+            'message': f'Static route {route_id} not found'
+        }), 404
+    
+    engine = get_routing_engine()
+    if not engine:
+        return jsonify({
+            'status': False,
+            'message': 'Routing engine not available'
+        }), 500
+    
+    # Remove old route first, then apply
+    engine.remove_static_route(route_id)
+    success, message = engine.apply_static_route(route)
+    
+    return jsonify({
+        'status': success,
+        'message': message
+    })
+
+
+@api.route('/static-routes/apply-all', methods=['POST'])
+@auth_required
+def apply_all_static_routes():
+    """Force reapply all enabled static routes."""
+    engine = get_routing_engine()
+    if not engine:
+        return jsonify({
+            'status': False,
+            'message': 'Routing engine not available'
+        }), 500
+    
+    results = engine.apply_all_static_routes()
+    
+    return jsonify({
+        'status': True,
+        'message': f'Applied {results["success"]} static routes, {results["failed"]} failed',
+        'data': results
+    })

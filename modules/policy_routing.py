@@ -155,6 +155,7 @@ def add_default_route_to_table(table: int, gateway: Optional[str], interface: st
         cmd = ['ip', 'route', 'add', 'default', 'via', gateway, 'dev', interface, 'table', str(table)]
     else:
         cmd = ['ip', 'route', 'add', 'default', 'dev', interface, 'table', str(table)]
+        cmd6 = ['ip', '-6', 'route', 'add', 'default', 'dev', interface, 'table', str(table)]
     
     success, output = run_command(cmd)
     
@@ -162,6 +163,13 @@ def add_default_route_to_table(table: int, gateway: Optional[str], interface: st
         logger.info(f"Added default route to table {table}: via {gateway or interface}")
     else:
         logger.error(f"Failed to add route to table {table}: {output}")
+
+    if cmd6:
+        success6, output6 = run_command(cmd6)
+        if success6:
+            logger.info(f"Added default v6 route to table {table}: dev {interface}")
+        else:
+            logger.error(f"Failed to add v6 route to table {table}: {output6}")
     
     return success, output
 

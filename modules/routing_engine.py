@@ -269,12 +269,12 @@ class RoutingEngine:
                     if peer:
                         ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peer.get('allowed_ip', ''))
                         logger.info(f"Using peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
-                else:
-                    # No specific peer - try to get first peer's IPs as default
-                    peers = self.wg.list_peers(rule.target_config)
-                    if peers:
-                        ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peers[0].get('allowed_ip', ''))
-                        logger.info(f"Using first peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
+                # else:
+                #     # No specific peer - try to get first peer's IPs as default
+                #     peers = self.wg.list_peers(rule.target_config)
+                #     if peers:
+                #         ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peers[0].get('allowed_ip', ''))
+                #         logger.info(f"Using first peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
                 
                 success, msg = setup_wireguard_routing(
                     rule.fwmark, rule.routing_table, wg_interface,

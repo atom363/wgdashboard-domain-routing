@@ -289,6 +289,15 @@ def update_rule(rule_id: int):
         rule.priority = data['priority']
     
     if db.update_rule(rule):
+        # Re-apply the rule if it's enabled
+        engine = get_routing_engine()
+        if engine:
+            # Remove old rule first
+            engine.remove_rule(rule_id)
+            # Apply new rule if enabled
+            if rule.enabled:
+                engine.apply_rule(rule)
+        
         return jsonify({
             'status': True,
             'message': 'Rule updated successfully',

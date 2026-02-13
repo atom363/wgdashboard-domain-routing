@@ -1,0 +1,47 @@
+services:
+  wgdashboard:
+    build: .
+    restart: unless-stopped
+    container_name: wgdashboard
+    ports:
+      - 127.0.0.1:8081:8081/tcp
+      - 127.0.0.1:10086:10086/tcp
+      - 51820:51820/udp
+      - 51821:51821/udp
+    volumes:
+      - aconf:/etc/amnezia/amneziawg
+      - conf:/etc/wireguard
+      - data:/data
+      - ./plugins:/opt/wgdashboard/src/plugins
+      - dnsmasq:/etc/dnsmasq.d/
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - wgdash
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.forwarding=1
+      - net.ipv6.conf.default.forwarding=1
+  dnsmasq:
+    image: dockurr/dnsmasq
+    container_name: dnsmasq
+    environment:
+      DNS1: "127.0.0.11"
+      DNS2: "127.0.0.11"
+    network_mode: service:wgdashboard
+    pid: service:wgdashboard
+    cap_add:
+      - NET_ADMIN
+    restart: always
+    volumes:
+      - dnsmasq:/etc/dnsmasq.d/
+
+volumes:
+  aconf:
+  conf:
+  data:
+  dnsmasq:
+
+networks:
+  wgdash:
+    enable_ipv6: true

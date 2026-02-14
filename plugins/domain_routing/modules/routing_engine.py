@@ -137,6 +137,9 @@ class RoutingEngine:
         # Initial apply on start (force dnsmasq update)
         self.apply_all_rules(force_dnsmasq_update=True)
         
+        # Apply all static routes on start
+        self.apply_all_static_routes()
+        
         while self._running and not self._stop_event.is_set():
             try:
                 # Sleep with interrupt capability
@@ -145,6 +148,7 @@ class RoutingEngine:
                 
                 # Periodic sync
                 self._sync_rules()
+                self._sync_static_routes()
                 
             except Exception as e:
                 logger.error(f"Error in monitoring loop: {e}")
@@ -165,6 +169,23 @@ class RoutingEngine:
         # Update dnsmasq config only if rules changed
         if rules_changed:
             self._update_dnsmasq_config()
+    
+    def _sync_static_routes(self):
+        """Synchronize applied static routes with database state."""
+        enabled_routes = self.db.get_enabled_static_routes()
+        
+        # Get all applied states for static routes
+        applied_states = {}
+        for route in self.db.get_all_static_routes():
+            state = self.db.get_static_route_applied_state(route.id)
+            if state:
+                applied_states[route.id] = state
+        
+        # Apply new/changed static routes
+        for route in enabled_routes:
+            state = applied_states.get(route.id)
+            if not state or state['status'] != 'active':
+                self.apply_static_route(route)
     
     def _parse_peer_gateways(self, allowed_ip: str) -> tuple[Optional[str], Optional[str]]:
         """

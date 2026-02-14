@@ -58,13 +58,51 @@ For this plugin to work properly, your WireGuard setup must be configured as fol
 
 The plugin is designed to work with WGDashboard in a Docker Compose setup with dnsmasq.
 
-1. **Clone or copy the plugin** to your project directory:
+1. **Clone this repository** to your project directory:
 ```bash
-mkdir -p plugins
-cp -r plugin/ plugins/domain_routing/
+git clone <repository-url>
+cd domain-routing-repo
 ```
 
-2. **Ensure your `docker-compose.yaml`** is configured to build from the local Dockerfile:
+The repository includes the plugin in the `plugins/domain_routing/` directory:
+```
+.
+├── docker-compose.yaml
+├── Dockerfile
+└── plugins/
+    └── domain_routing/
+        ├── main.py
+        ├── config.ini
+        ├── requirements.txt
+        ├── modules/
+        └── web/
+```
+
+2. **Configure the plugin** by editing `plugins/domain_routing/config.ini`:
+
+> **Recommendation:** Set a secure `auth_token` before starting the container. If not set, a token will be auto-generated and displayed in the logs.
+
+```ini
+[WebServer]
+port = 8081
+host = 0.0.0.0
+auth_enabled = true
+auth_token = your-secure-random-token-here
+
+[Database]
+path = /opt/wgdashboard/src/plugins/domain_routing/db/routing_rules.db
+
+[Routing]
+monitoring_interval = 30
+dnsmasq_config_path = /etc/dnsmasq.d/wgdashboard-domains.conf
+```
+
+To generate a secure token, you can use:
+```bash
+openssl rand -base64 32
+```
+
+3. **Review the `docker-compose.yaml`** configuration:
 ```yaml
 services:
   wgdashboard:
@@ -116,28 +154,13 @@ networks:
     enable_ipv6: true
 ```
 
-3. **Configure the plugin** by editing `plugins/domain_routing/config.ini`:
+The `Dockerfile` extends the official WGDashboard image with `ipset` support:
+```dockerfile
+ARG VERSION=latest
+FROM ghcr.io/wgdashboard/wgdashboard:${VERSION}
 
-> **Recommendation:** Set a secure `auth_token` before starting the container. If not set, a token will be auto-generated and displayed in the logs.
-
-```ini
-[WebServer]
-port = 8081
-host = 0.0.0.0
-auth_enabled = true
-auth_token = your-secure-random-token-here
-
-[Database]
-path = /opt/wgdashboard/src/plugins/domain_routing/db/routing_rules.db
-
-[Routing]
-monitoring_interval = 30
-dnsmasq_config_path = /etc/dnsmasq.d/wgdashboard-domains.conf
-```
-
-To generate a secure token, you can use:
-```bash
-openssl rand -base64 32
+RUN apk update && \
+    apk add --no-cache ipset
 ```
 
 4. **Build and start the services**:
@@ -161,14 +184,14 @@ docker-compose up -d
 
 For non-Docker setups:
 
-1. Copy the plugin directory to your WGDashboard plugins folder:
+1. Copy the `plugins/domain_routing/` directory to your WGDashboard plugins folder:
 ```bash
-cp -r plugin/ /path/to/wgdashboard/plugins/domain_routing/
+cp -r plugins/domain_routing/ /path/to/wgdashboard/plugins/
 ```
 
 2. Install Python dependencies:
 ```bash
-pip install -r plugin/requirements.txt
+pip install -r plugins/domain_routing/requirements.txt
 ```
 
 3. Configure the plugin by editing `config.ini` (see Configuration section below).
@@ -307,22 +330,22 @@ The plugin consists of several integrated components:
 
 ### Core Modules
 
-- **Routing Engine** ([`routing_engine.py`](plugin/modules/routing_engine.py)): Monitors database and applies routing rules
-- **Database** ([`database.py`](plugin/modules/database.py)): SQLite database for rules and state management
-- **WireGuard Interface** ([`wg_interface.py`](plugin/modules/wg_interface.py)): Interface to WGDashboard WireGuard configurations
+- **Routing Engine** ([`modules/routing_engine.py`](plugins/domain_routing/modules/routing_engine.py)): Monitors database and applies routing rules
+- **Database** ([`modules/database.py`](plugins/domain_routing/modules/database.py)): SQLite database for rules and state management
+- **WireGuard Interface** ([`modules/wg_interface.py`](plugins/domain_routing/modules/wg_interface.py)): Interface to WGDashboard WireGuard configurations
 
 ### System Integration
 
-- **IPSet Manager** ([`ipset_manager.py`](plugin/modules/ipset_manager.py)): Manages ipsets for IP grouping
-- **IPTables Manager** ([`iptables_manager.py`](plugin/modules/iptables_manager.py)): Handles packet marking rules
-- **Policy Routing** ([`policy_routing.py`](plugin/modules/policy_routing.py)): Configures routing tables and rules
-- **DNSMasq Integration** ([`dnsmasq_integration.py`](plugin/modules/dnsmasq_integration.py)): Auto-generates dnsmasq config
+- **IPSet Manager** ([`modules/ipset_manager.py`](plugins/domain_routing/modules/ipset_manager.py)): Manages ipsets for IP grouping
+- **IPTables Manager** ([`modules/iptables_manager.py`](plugins/domain_routing/modules/iptables_manager.py)): Handles packet marking rules
+- **Policy Routing** ([`modules/policy_routing.py`](plugins/domain_routing/modules/policy_routing.py)): Configures routing tables and rules
+- **DNSMasq Integration** ([`modules/dnsmasq_integration.py`](plugins/domain_routing/modules/dnsmasq_integration.py)): Auto-generates dnsmasq config
 
 ### Web Layer
 
-- **API** ([`api.py`](plugin/web/api.py)): REST API endpoints
-- **App** ([`app.py`](plugin/web/app.py)): Flask application setup
-- **Auth** ([`auth.py`](plugin/web/auth.py)): Token-based authentication
+- **API** ([`web/api.py`](plugins/domain_routing/web/api.py)): REST API endpoints
+- **App** ([`web/app.py`](plugins/domain_routing/web/app.py)): Flask application setup
+- **Auth** ([`web/auth.py`](plugins/domain_routing/web/auth.py)): Token-based authentication
 
 ## How It Works
 
@@ -366,23 +389,28 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:8081/api/rules/
 ## Project Structure
 
 ```
-plugin/
-├── main.py              # Plugin entry point
-├── config.ini           # Configuration file
-├── requirements.txt     # Python dependencies
-├── modules/             # Core functionality
-│   ├── database.py      # Database operations
-│   ├── routing_engine.py # Routing rule engine
-│   ├── wg_interface.py  # WireGuard integration
-│   ├── ipset_manager.py # IPSet management
-│   ├── iptables_manager.py # IPTables rules
-│   ├── policy_routing.py # Routing table management
-│   └── dnsmasq_integration.py # DNSMasq config
-└── web/                 # Web interface
-    ├── app.py           # Flask application
-    ├── api.py           # REST API endpoints
-    ├── auth.py          # Authentication
-    └── static/          # Static assets (HTML, CSS, JS)
+.
+├── docker-compose.yaml    # Docker Compose configuration
+├── Dockerfile             # Custom WGDashboard image with ipset
+└── plugins/
+    └── domain_routing/    # Plugin directory
+        ├── main.py              # Plugin entry point
+        ├── config.ini           # Configuration file
+        ├── requirements.txt     # Python dependencies
+        ├── db/                  # Database directory
+        ├── modules/             # Core functionality
+        │   ├── database.py      # Database operations
+        │   ├── routing_engine.py # Routing rule engine
+        │   ├── wg_interface.py  # WireGuard integration
+        │   ├── ipset_manager.py # IPSet management
+        │   ├── iptables_manager.py # IPTables rules
+        │   ├── policy_routing.py # Routing table management
+        │   └── dnsmasq_integration.py # DNSMasq config
+        └── web/                 # Web interface
+            ├── app.py           # Flask application
+            ├── api.py           # REST API endpoints
+            ├── auth.py          # Authentication
+            └── static/          # Static assets (HTML, CSS, JS)
 ```
 
 ## License

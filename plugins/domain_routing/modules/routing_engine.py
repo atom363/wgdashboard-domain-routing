@@ -246,45 +246,58 @@ class RoutingEngine:
             
             logger.info(f"Resolved {ipv4_count} IPv4 and {ipv6_count} IPv6 addresses for {rule.domain}")
             
-            # Step 3: Add iptables and ip6tables mangle rules
-            success, msg = add_mangle_rules_dual_stack(ipset_name_v4, ipset_name_v6, rule.fwmark, rule.id)
+            # Step 3: Add iptables and ip6tables rules (forward or block based on rule settings)
+            success, msg = add_mangle_rules_dual_stack(
+                ipset_name_v4, ipset_name_v6, rule.fwmark, rule.id,
+                ipv4_action=rule.ipv4_action,
+                ipv6_action=rule.ipv6_action
+            )
             if not success:
                 return self._mark_failed(rule, f"Failed to add iptables rules: {msg}")
             
-            # Step 4: Setup policy routing
-            if rule.target_type == 'default_gateway':
-                success, msg = setup_default_gateway_routing(rule.fwmark, rule.routing_table)
-            elif rule.target_type == 'wireguard_peer':
-                wg_interface = self.wg.get_interface_name(rule.target_config)
-                if not wg_interface:
-                    return self._mark_failed(rule, f"WireGuard config {rule.target_config} not found")
-                
-                # Get peer gateway IPs from allowed_ip
-                ipv4_gateway = None
-                ipv6_gateway = None
-                
-                if rule.target_peer:
-                    # Specific peer selected - use its allowed IPs
-                    peer = self.wg.get_peer(rule.target_config, rule.target_peer)
-                    if peer:
-                        ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peer.get('allowed_ip', ''))
-                        logger.info(f"Using peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
-                # else:
-                #     # No specific peer - try to get first peer's IPs as default
-                #     peers = self.wg.list_peers(rule.target_config)
-                #     if peers:
-                #         ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peers[0].get('allowed_ip', ''))
-                #         logger.info(f"Using first peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
-                
-                success, msg = setup_wireguard_routing(
-                    rule.fwmark, rule.routing_table, wg_interface,
-                    ipv4_gateway=ipv4_gateway, ipv6_gateway=ipv6_gateway
-                )
-            else:
-                return self._mark_failed(rule, f"Unknown target type: {rule.target_type}")
+            # Step 4: Setup policy routing (only for IP versions that are being forwarded)
+            # Check if at least one IP version is set to forward
+            ipv4_forward = rule.ipv4_action == "forward"
+            ipv6_forward = rule.ipv6_action == "forward"
             
-            if not success:
-                return self._mark_failed(rule, f"Failed to setup routing: {msg}")
+            if ipv4_forward or ipv6_forward:
+                if rule.target_type == 'default_gateway':
+                    success, msg = setup_default_gateway_routing(rule.fwmark, rule.routing_table)
+                elif rule.target_type == 'wireguard_peer':
+                    wg_interface = self.wg.get_interface_name(rule.target_config)
+                    if not wg_interface:
+                        return self._mark_failed(rule, f"WireGuard config {rule.target_config} not found")
+                    
+                    # Get peer gateway IPs from allowed_ip
+                    ipv4_gateway = None
+                    ipv6_gateway = None
+                    
+                    if rule.target_peer:
+                        # Specific peer selected - use its allowed IPs
+                        peer = self.wg.get_peer(rule.target_config, rule.target_peer)
+                        if peer:
+                            ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peer.get('allowed_ip', ''))
+                            logger.info(f"Using peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
+                    # else:
+                    #     # No specific peer - try to get first peer's IPs as default
+                    #     peers = self.wg.list_peers(rule.target_config)
+                    #     if peers:
+                    #         ipv4_gateway, ipv6_gateway = self._parse_peer_gateways(peers[0].get('allowed_ip', ''))
+                    #         logger.info(f"Using first peer gateways: IPv4={ipv4_gateway}, IPv6={ipv6_gateway}")
+                    
+                    # Only pass gateways for IP versions that are being forwarded
+                    success, msg = setup_wireguard_routing(
+                        rule.fwmark, rule.routing_table, wg_interface,
+                        ipv4_gateway=ipv4_gateway if ipv4_forward else None,
+                        ipv6_gateway=ipv6_gateway if ipv6_forward else None
+                    )
+                else:
+                    return self._mark_failed(rule, f"Unknown target type: {rule.target_type}")
+                
+                if not success:
+                    return self._mark_failed(rule, f"Failed to setup routing: {msg}")
+            else:
+                logger.info(f"Skipping policy routing for rule {rule.name} - both IPv4 and IPv6 are set to block")
             
             # Mark as active
             state = AppliedState(
@@ -299,8 +312,9 @@ class RoutingEngine:
             self._last_dnsmasq_rules_hash = None  # Force update
             self._update_dnsmasq_config()
             
-            logger.info(f"Successfully applied rule: {rule.name} ({ipv4_count} IPv4, {ipv6_count} IPv6)")
-            return True, f"Rule applied ({ipv4_count} IPv4, {ipv6_count} IPv6 addresses)"
+            action_info = f"IPv4:{rule.ipv4_action}, IPv6:{rule.ipv6_action}"
+            logger.info(f"Successfully applied rule: {rule.name} ({ipv4_count} IPv4, {ipv6_count} IPv6, {action_info})")
+            return True, f"Rule applied ({ipv4_count} IPv4, {ipv6_count} IPv6 addresses, {action_info})"
             
         except Exception as e:
             logger.exception(f"Exception applying rule {rule.name}")

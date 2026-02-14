@@ -436,6 +436,65 @@ form {
     display: block;
 }
 
+/* Toggle Group for IPv4/IPv6 Actions */
+.toggle-group {
+    display: flex;
+    gap: 12px;
+}
+
+.toggle-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex: 1;
+    justify-content: center;
+}
+
+.toggle-option:hover {
+    border-color: var(--accent-primary);
+}
+
+.toggle-option input[type="radio"] {
+    margin: 0;
+}
+
+.toggle-option input[type="radio"]:checked + span {
+    color: var(--accent-primary);
+    font-weight: 600;
+}
+
+/* IP Action Badges */
+.ip-action-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.ip-action-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ip-action-badge.forward {
+    background-color: rgba(16, 185, 129, 0.2);
+    color: var(--success);
+}
+
+.ip-action-badge.block {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: var(--danger);
+}
+
 /* Utility */
 .hidden {
     display: none !important;

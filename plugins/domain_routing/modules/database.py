@@ -23,6 +23,8 @@ class RoutingRule:
     routing_table: int = 100
     enabled: bool = True
     priority: int = 100
+    ipv4_action: str = "forward"          # "forward" or "block"
+    ipv6_action: str = "forward"          # "forward" or "block"
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -78,6 +80,14 @@ class Database:
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
 
+    def _add_column_if_not_exists(self, cursor: sqlite3.Cursor, table: str, column: str, column_def: str):
+        """Add a column to a table if it doesn't already exist."""
+        cursor.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in cursor.fetchall()]
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
+            print(f"[Database] Added column '{column}' to table '{table}'")
+
     def _get_connection(self) -> sqlite3.Connection:
         """Get a database connection with row factory."""
         conn = sqlite3.connect(self.db_path)
@@ -102,10 +112,16 @@ class Database:
                 routing_table INTEGER NOT NULL DEFAULT 100,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 priority INTEGER NOT NULL DEFAULT 100,
+                ipv4_action TEXT DEFAULT 'forward',
+                ipv6_action TEXT DEFAULT 'forward',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
+
+        # Migration: Add ipv4_action and ipv6_action columns if they don't exist
+        self._add_column_if_not_exists(cursor, 'routing_rules', 'ipv4_action', "TEXT DEFAULT 'forward'")
+        self._add_column_if_not_exists(cursor, 'routing_rules', 'ipv6_action', "TEXT DEFAULT 'forward'")
 
         # Create applied_state table
         cursor.execute("""
@@ -200,12 +216,12 @@ class Database:
         cursor.execute("""
             INSERT INTO routing_rules 
             (name, domain, target_type, target_config, target_peer, fwmark, 
-             routing_table, enabled, priority, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             routing_table, enabled, priority, ipv4_action, ipv6_action, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             rule.name, rule.domain, rule.target_type, rule.target_config,
             rule.target_peer, rule.fwmark, rule.routing_table,
-            1 if rule.enabled else 0, rule.priority, now, now
+            1 if rule.enabled else 0, rule.priority, rule.ipv4_action, rule.ipv6_action, now, now
         ))
 
         rule.id = cursor.lastrowid
@@ -228,12 +244,12 @@ class Database:
             UPDATE routing_rules SET
                 name = ?, domain = ?, target_type = ?, target_config = ?,
                 target_peer = ?, fwmark = ?, routing_table = ?, enabled = ?,
-                priority = ?, updated_at = ?
+                priority = ?, ipv4_action = ?, ipv6_action = ?, updated_at = ?
             WHERE id = ?
         """, (
             rule.name, rule.domain, rule.target_type, rule.target_config,
             rule.target_peer, rule.fwmark, rule.routing_table,
-            1 if rule.enabled else 0, rule.priority, now, rule.id
+            1 if rule.enabled else 0, rule.priority, rule.ipv4_action, rule.ipv6_action, now, rule.id
         ))
 
         success = cursor.rowcount > 0
@@ -559,6 +575,8 @@ class Database:
             routing_table=row['routing_table'],
             enabled=bool(row['enabled']),
             priority=row['priority'],
+            ipv4_action=row['ipv4_action'] if 'ipv4_action' in row.keys() else 'forward',
+            ipv6_action=row['ipv6_action'] if 'ipv6_action' in row.keys() else 'forward',
             created_at=row['created_at'],
             updated_at=row['updated_at']
         )

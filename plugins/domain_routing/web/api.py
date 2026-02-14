@@ -222,6 +222,20 @@ def create_rule():
                 'message': 'target_config is required for wireguard_peer target'
             }), 400
     
+    # Validate ipv4_action and ipv6_action
+    ipv4_action = data.get('ipv4_action', 'forward')
+    ipv6_action = data.get('ipv6_action', 'forward')
+    if ipv4_action not in ['forward', 'block']:
+        return jsonify({
+            'status': False,
+            'message': 'ipv4_action must be "forward" or "block"'
+        }), 400
+    if ipv6_action not in ['forward', 'block']:
+        return jsonify({
+            'status': False,
+            'message': 'ipv6_action must be "forward" or "block"'
+        }), 400
+    
     db = get_db()
     
     # Auto-assign fwmark and routing_table if not provided
@@ -239,7 +253,9 @@ def create_rule():
         fwmark=data['fwmark'],
         routing_table=data['routing_table'],
         enabled=data.get('enabled', True),
-        priority=data.get('priority', 100)
+        priority=data.get('priority', 100),
+        ipv4_action=ipv4_action,
+        ipv6_action=ipv6_action
     )
     
     rule = db.create_rule(rule)
@@ -295,6 +311,20 @@ def update_rule(rule_id: int):
         rule.enabled = data['enabled']
     if 'priority' in data:
         rule.priority = data['priority']
+    if 'ipv4_action' in data:
+        if data['ipv4_action'] not in ['forward', 'block']:
+            return jsonify({
+                'status': False,
+                'message': 'ipv4_action must be "forward" or "block"'
+            }), 400
+        rule.ipv4_action = data['ipv4_action']
+    if 'ipv6_action' in data:
+        if data['ipv6_action'] not in ['forward', 'block']:
+            return jsonify({
+                'status': False,
+                'message': 'ipv6_action must be "forward" or "block"'
+            }), 400
+        rule.ipv6_action = data['ipv6_action']
     
     if db.update_rule(rule):
         # Re-apply the rule if it's enabled

@@ -261,6 +261,10 @@ function renderRuleCard(rule) {
         }
     }
     
+    // Format IPv4/IPv6 action indicators
+    const ipv4Badge = rule.ipv4_action === 'block' ? '<span class="ip-action-badge block" title="IPv4 blocked">IPv4:Block</span>' : '<span class="ip-action-badge forward" title="IPv4 forwarded">IPv4:Fwd</span>';
+    const ipv6Badge = rule.ipv6_action === 'block' ? '<span class="ip-action-badge block" title="IPv6 blocked">IPv6:Block</span>' : '<span class="ip-action-badge forward" title="IPv6 forwarded">IPv6:Fwd</span>';
+    
     return `
         <div class="rule-card ${disabledClass}" data-rule-id="${rule.id}">
             <div class="rule-card-header">
@@ -277,6 +281,10 @@ function renderRuleCard(rule) {
                 <div class="rule-detail">
                     <span class="rule-detail-label">Target</span>
                     <span class="rule-detail-value">${escapeHtml(targetDisplay)}</span>
+                </div>
+                <div class="rule-detail">
+                    <span class="rule-detail-label">Actions</span>
+                    <span class="rule-detail-value ip-action-badges">${ipv4Badge} ${ipv6Badge}</span>
                 </div>
                 <div class="rule-detail">
                     <span class="rule-detail-label">Priority</span>
@@ -413,6 +421,14 @@ function openRuleModal(rule = null) {
     elements.ruleForm.reset();
     elements.ruleId.value = '';
     
+    // Reset IPv4/IPv6 action radios to default (forward)
+    document.querySelectorAll('input[name="ipv4-action"]').forEach(radio => {
+        radio.checked = (radio.value === 'forward');
+    });
+    document.querySelectorAll('input[name="ipv6-action"]').forEach(radio => {
+        radio.checked = (radio.value === 'forward');
+    });
+    
     if (rule) {
         elements.modalTitle.textContent = 'Edit Rule';
         elements.ruleId.value = rule.id;
@@ -421,6 +437,16 @@ function openRuleModal(rule = null) {
         elements.ruleTargetType.value = rule.target_type;
         elements.rulePriority.value = rule.priority;
         elements.ruleEnabled.checked = rule.enabled;
+        
+        // Set IPv4/IPv6 action radios
+        const ipv4Action = rule.ipv4_action || 'forward';
+        const ipv6Action = rule.ipv6_action || 'forward';
+        document.querySelectorAll('input[name="ipv4-action"]').forEach(radio => {
+            radio.checked = (radio.value === ipv4Action);
+        });
+        document.querySelectorAll('input[name="ipv6-action"]').forEach(radio => {
+            radio.checked = (radio.value === ipv6Action);
+        });
         
         if (rule.target_type === 'wireguard_peer') {
             elements.ruleTargetConfig.value = rule.target_config || '';
@@ -542,6 +568,10 @@ async function handleStaticRouteSubmit(e) {
 async function handleRuleSubmit(e) {
     e.preventDefault();
     
+    // Get selected IPv4/IPv6 actions
+    const ipv4Action = document.querySelector('input[name="ipv4-action"]:checked')?.value || 'forward';
+    const ipv6Action = document.querySelector('input[name="ipv6-action"]:checked')?.value || 'forward';
+    
     const rule = {
         name: elements.ruleName.value.trim(),
         domain: elements.ruleDomain.value.trim(),
@@ -549,7 +579,9 @@ async function handleRuleSubmit(e) {
         target_config: elements.ruleTargetConfig.value || null,
         target_peer: elements.ruleTargetPeer.value || null,
         priority: parseInt(elements.rulePriority.value) || 100,
-        enabled: elements.ruleEnabled.checked
+        enabled: elements.ruleEnabled.checked,
+        ipv4_action: ipv4Action,
+        ipv6_action: ipv6Action
     };
     
     try {

@@ -99,6 +99,36 @@
                     </div>
                     
                     <div class="form-group">
+                        <label>IPv4 Action</label>
+                        <div class="toggle-group">
+                            <label class="toggle-option">
+                                <input type="radio" name="ipv4-action" value="forward" checked>
+                                <span>Forward</span>
+                            </label>
+                            <label class="toggle-option">
+                                <input type="radio" name="ipv4-action" value="block">
+                                <span>Block</span>
+                            </label>
+                        </div>
+                        <small>Forward routes traffic, Block drops all traffic (TCP gets RST)</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>IPv6 Action</label>
+                        <div class="toggle-group">
+                            <label class="toggle-option">
+                                <input type="radio" name="ipv6-action" value="forward" checked>
+                                <span>Forward</span>
+                            </label>
+                            <label class="toggle-option">
+                                <input type="radio" name="ipv6-action" value="block">
+                                <span>Block</span>
+                            </label>
+                        </div>
+                        <small>Forward routes traffic, Block drops all traffic (TCP gets RST)</small>
+                    </div>
+                    
+                    <div class="form-group">
                         <label>
                             <input type="checkbox" id="rule-enabled" checked>
                             Enabled

@@ -5,6 +5,8 @@ A powerful plugin for [WGDashboard](https://github.com/WGDashboard/WGDashboard) 
 ## Features
 
 - **Domain-Based Routing**: Route traffic for specific domains through different network paths
+- **IPv4/IPv6 Action Control**: Per-rule toggles to forward or block traffic for each IP version
+- **TCP RST Blocking**: Block domains with TCP RST responses for immediate connection termination
 - **Static Route Support**: Configure direct IP/CIDR-based routing rules
 - **WireGuard Integration**: Seamlessly works with existing WGDashboard WireGuard configurations
 - **Automatic DNS Resolution**: Uses DNSMasq for automatic IP resolution and ipset population
@@ -241,7 +243,18 @@ Access the UI with: `http://localhost:8081?token=<your-token>`
    - **Target Type**: `default_gateway` or `wireguard_peer`
    - **Target Config**: WireGuard configuration name (for peer targets)
    - **Target Peer**: Specific peer public key (optional)
+   - **IPv4 Action**: `forward` (route traffic) or `block` (drop traffic, TCP gets RST)
+   - **IPv6 Action**: `forward` (route traffic) or `block` (drop traffic, TCP gets RST)
    - **Priority**: Rule priority (lower = higher priority)
+
+#### IPv4/IPv6 Action Options
+
+Each domain rule can independently control IPv4 and IPv6 traffic:
+
+- **Forward**: Route traffic through the selected target (default gateway or WireGuard peer)
+- **Block**: Drop all traffic to the domain
+  - TCP connections receive RST (immediate termination)
+  - UDP and other protocols are silently dropped
 
 ### Creating Static Routes
 
@@ -322,6 +335,20 @@ curl -X POST -H "Authorization: Bearer <token>" \
     "target_peer": "<peer_public_key>"
   }' \
   http://localhost:8081/api/rules
+
+# Create a rule that blocks IPv4 and routes IPv6
+curl -X POST -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Block IPv4 Only",
+    "domain": "example.com",
+    "target_type": "default_gateway",
+    "ipv4_action": "block",
+    "ipv6_action": "forward",
+    "enabled": true,
+    "priority": 100
+  }' \
+  http://localhost:8081/api/rules
 ```
 
 ## Architecture
@@ -351,9 +378,18 @@ The plugin consists of several integrated components:
 
 1. **Rule Definition**: Define domain or IP-based routing rules via web UI or API
 2. **DNS Resolution**: DNSMasq resolves domains and populates ipsets automatically
-3. **Packet Marking**: iptables rules mark packets destined for ipset members
+3. **Traffic Control**: 
+   - **Forward**: iptables rules in mangle table mark packets destined for ipset members
+   - **Block**: iptables rules in filter table drop packets (TCP gets RST, others are dropped)
 4. **Policy Routing**: ip rules direct marked packets to specific routing tables
 5. **Route Selection**: Custom routing tables send traffic through the chosen gateway/interface
+
+### Traffic Blocking Details
+
+When a domain rule is set to "Block" for an IP version:
+- **TCP traffic**: Receives immediate RST (reset) response, causing instant connection failure
+- **UDP/ICMP traffic**: Silently dropped without response
+- **Implementation**: Uses filter table (OUTPUT and FORWARD chains) instead of mangle table
 
 ## Database Schema
 
